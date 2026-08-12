@@ -64,6 +64,21 @@ def split_runs(*longitude_series):
     return [(a, b) for a, b in runs if b - a >= 2]
 
 
+def geometries(eclipse):
+    """Band and region products for one eclipse, without duplicates."""
+    found, seen = [], set()
+    for item in (eclipse.central_band, eclipse.coverage_band,
+                 eclipse.coverage_region):
+        if item and id(item) not in seen:
+            seen.add(id(item))
+            found.append(item)
+    return found
+
+
+def is_region(geometry):
+    return hasattr(geometry, 'centre_latitude')
+
+
 # --- GeoJSON -----------------------------------------------------------------
 
 def _line_feature(coords, times, properties):
@@ -90,8 +105,27 @@ def eclipse_geojson_features(eclipse, timescale):
             dict(base, feature='shadow-track',
                  description='locus of the deepest eclipse on the globe')))
 
-    band = eclipse.coverage_band
-    if band and band.points:
+    for region in [x for x in geometries(eclipse) if is_region(x)]:
+        ring = [[round(p.longitude, 6), round(p.latitude, 6)]
+                for p in region.points]
+        ring.append(ring[0])
+        times = [utc_iso(timescale, p.tt) for p in region.points]
+        times.append(times[0])
+        properties = dict(base, feature='coverage-region', band=region.label,
+                          encloses_pole=region.encloses_pole)
+        runs = split_runs([point[0] for point in ring])
+        simple = len(runs) == 1 and not region.encloses_pole
+        for a, b in runs:
+            features.append(_line_feature(ring[a:b], times[a:b], properties))
+        if simple:
+            # Only a region that neither wraps the antimeridian nor reaches
+            # over a pole can be closed as a plain lat/lon polygon.
+            features.append({'type': 'Feature',
+                             'properties': dict(properties, feature='region-area'),
+                             'geometry': {'type': 'Polygon',
+                                          'coordinates': [ring]}})
+
+    for band in [x for x in geometries(eclipse) if not is_region(x)]:
         label = band.label
         centre = [p.longitude for p in band.points]
         north = [unwrap_to(c, p.north_longitude)
@@ -165,6 +199,8 @@ def eclipse_detail(eclipse, timescale):
         'threshold_percent': round(eclipse.threshold * 100.0, 3),
         'meets_threshold': eclipse.meets_threshold,
     })
+    detail['geometries'] = [_geometry_detail(item, timescale)
+                            for item in geometries(eclipse)]
     band = eclipse.coverage_band
     detail['band'] = None if not band else {
         'label': band.label,
@@ -187,36 +223,89 @@ def eclipse_detail(eclipse, timescale):
     return detail
 
 
+def _geometry_detail(geometry, timescale):
+    if is_region(geometry):
+        return {
+            'kind': 'region',
+            'label': geometry.label,
+            'centre_latitude': round(geometry.centre_latitude, 5),
+            'centre_longitude': round(geometry.centre_longitude, 5),
+            'encloses_pole': geometry.encloses_pole,
+            'boundary': [{
+                'azimuth': round(p.azimuth, 2),
+                'latitude': round(p.latitude, 5),
+                'longitude': round(p.longitude, 5),
+                'distance_km': round(p.distance_km, 1),
+                'maximum_utc': utc_iso(timescale, p.tt),
+                'sun_altitude': round(p.sun_altitude, 1),
+            } for p in geometry.points]}
+    return {
+        'kind': 'band',
+        'label': geometry.label,
+        'truncated': geometry.truncated,
+        'cross_sections': [{
+            'time_utc': utc_iso(timescale, p.tt),
+            'latitude': round(p.latitude, 5),
+            'longitude': round(p.longitude, 5),
+            'north_latitude': round(p.north_latitude, 5),
+            'north_longitude': round(p.north_longitude, 5),
+            'south_latitude': round(p.south_latitude, 5),
+            'south_longitude': round(p.south_longitude, 5),
+            'width_km': None if p.width_km != p.width_km else round(p.width_km, 1),
+            'width_is_transverse': p.transverse,
+            'duration_seconds': round(p.duration_seconds, 1),
+            'sun_altitude': round(p.sun_altitude, 1),
+            'starts_utc': utc_iso(timescale, p.tt_start),
+            'ends_utc': utc_iso(timescale, p.tt_end),
+        } for p in geometry.points]}
+
+
 def to_json(eclipses, timescale, metadata=None):
     return {'metadata': metadata or {},
             'eclipses': [eclipse_detail(e, timescale) for e in eclipses]}
 
 
-CSV_COLUMNS = ['date', 'type', 'band', 'time_utc', 'centre_latitude',
-               'centre_longitude', 'north_latitude', 'north_longitude',
+CSV_COLUMNS = ['date', 'type', 'geometry', 'kind', 'time_utc', 'latitude',
+               'longitude', 'north_latitude', 'north_longitude',
                'south_latitude', 'south_longitude', 'width_km',
                'duration_seconds', 'sun_altitude', 'starts_utc', 'ends_utc']
 
 
 def to_csv(eclipses, timescale):
+    """One flat table of every traced point.
+
+    A ``cross-section`` row cuts across a band, so it carries both limits, a
+    width and a duration; a ``boundary`` row is one vertex of a region outline,
+    where those do not apply and are left empty.
+    """
     buffer = io.StringIO()
     writer = csv.writer(buffer, lineterminator='\n')
     writer.writerow(CSV_COLUMNS)
     for eclipse in eclipses:
-        band = eclipse.coverage_band
-        if not band:
-            continue
         date = utc_iso(timescale, eclipse.tt_greatest)[:10]
-        for p in band.points:
-            writer.writerow([
-                date, eclipse.kind, band.label, utc_iso(timescale, p.tt),
-                '%.5f' % p.latitude, '%.5f' % p.longitude,
-                '%.5f' % p.north_latitude, '%.5f' % p.north_longitude,
-                '%.5f' % p.south_latitude, '%.5f' % p.south_longitude,
-                '' if p.width_km != p.width_km else '%.1f' % p.width_km,
-                '%.1f' % p.duration_seconds,
-                '%.1f' % p.sun_altitude,
-                utc_iso(timescale, p.tt_start), utc_iso(timescale, p.tt_end)])
+        for geometry in geometries(eclipse):
+            for point in geometry.points:
+                if is_region(geometry):
+                    row = [utc_iso(timescale, point.tt),
+                           '%.5f' % point.latitude, '%.5f' % point.longitude,
+                           '', '', '', '', '', '',
+                           '%.1f' % point.sun_altitude, '', '']
+                    kind = 'boundary'
+                else:
+                    row = [utc_iso(timescale, point.tt),
+                           '%.5f' % point.latitude, '%.5f' % point.longitude,
+                           '%.5f' % point.north_latitude,
+                           '%.5f' % point.north_longitude,
+                           '%.5f' % point.south_latitude,
+                           '%.5f' % point.south_longitude,
+                           '' if point.width_km != point.width_km
+                           else '%.1f' % point.width_km,
+                           '%.1f' % point.duration_seconds,
+                           '%.1f' % point.sun_altitude,
+                           utc_iso(timescale, point.tt_start),
+                           utc_iso(timescale, point.tt_end)]
+                    kind = 'cross-section'
+                writer.writerow([date, eclipse.kind, geometry.label, kind] + row)
     return buffer.getvalue()
 
 
@@ -257,43 +346,78 @@ def format_text(eclipses, timescale, threshold, path_rows=14, show_all=False):
                                     for e in skipped)))
 
     for e in qualifying:
-        band = e.coverage_band
-        if not band or not band.points:
-            continue
-        out.append('')
-        out.append('=' * 100)
-        out.append('%s  %s solar eclipse  -  path of %s'
-                   % (utc_iso(timescale, e.tt_greatest)[:10],
-                      TYPE_NAMES[e.kind], band.label))
-        out.append('  eclipse begins %s UTC, ends %s UTC   saros %d, lunation %d'
-                   % (utc_clock(timescale, e.tt_first_contact),
-                      utc_clock(timescale, e.tt_last_contact),
-                      e.saros, e.lunation))
-        out.append('-' * 100)
-        out.append('   Time UTC   Centre line          Northern limit       '
-                   'Southern limit         Width   Duration  Sun')
-        out.append('-' * 100)
-        points = band.points
-        step = max(1, len(points) // path_rows) if path_rows else 1
-        shown = points[::step]
-        if shown[-1] is not points[-1]:
-            shown.append(points[-1])
-        for p in shown:
-            width = '%6.0f km' % p.width_km if p.width_km == p.width_km else '        -'
-            out.append('   %s  %8s %9s  %8s %9s  %8s %9s  %s %9s %4.0f'
-                       % (utc_clock(timescale, p.tt),
-                          _signed(p.latitude, 'N', 'S', 3),
-                          _signed(p.longitude, 'E', 'W', 3),
-                          _signed(p.north_latitude, 'N', 'S', 3),
-                          _signed(p.north_longitude, 'E', 'W', 3),
-                          _signed(p.south_latitude, 'N', 'S', 3),
-                          _signed(p.south_longitude, 'E', 'W', 3),
-                          width, format_duration(p.duration_seconds),
-                          p.sun_altitude))
-        if band.truncated:
-            out.append('   note: the band is wider than the %d km search limit '
-                       'somewhere along the path' % 12000)
+        for geometry in geometries(e):
+            if not geometry.points:
+                continue
+            out.append('')
+            out.append('=' * 100)
+            kind = 'region' if is_region(geometry) else 'path'
+            out.append('%s  %s solar eclipse  -  %s of %s'
+                       % (utc_iso(timescale, e.tt_greatest)[:10],
+                          TYPE_NAMES[e.kind], kind, geometry.label))
+            out.append('  eclipse begins %s UTC, ends %s UTC   '
+                       'saros %d, lunation %d'
+                       % (utc_clock(timescale, e.tt_first_contact),
+                          utc_clock(timescale, e.tt_last_contact),
+                          e.saros, e.lunation))
+            out.append('-' * 100)
+            if is_region(geometry):
+                out.extend(_region_rows(geometry, timescale, path_rows))
+            else:
+                out.extend(_band_rows(geometry, timescale, path_rows))
     return '\n'.join(out)
+
+
+def _sample(points, wanted):
+    if not wanted or wanted >= len(points):
+        return list(points)
+    step = max(1, len(points) // wanted)
+    shown = list(points[::step])
+    if shown[-1] is not points[-1]:
+        shown.append(points[-1])
+    return shown
+
+
+def _band_rows(band, timescale, path_rows):
+    rows = ['   Time UTC   Centre line          Northern limit       '
+            'Southern limit         Width   Duration  Sun',
+            '-' * 100]
+    for p in _sample(band.points, path_rows):
+        width = '%6.0f km' % p.width_km if p.width_km == p.width_km else '        -'
+        rows.append('   %s  %8s %9s  %8s %9s  %8s %9s  %s %9s %4.0f'
+                    % (utc_clock(timescale, p.tt),
+                       _signed(p.latitude, 'N', 'S', 3),
+                       _signed(p.longitude, 'E', 'W', 3),
+                       _signed(p.north_latitude, 'N', 'S', 3),
+                       _signed(p.north_longitude, 'E', 'W', 3),
+                       _signed(p.south_latitude, 'N', 'S', 3),
+                       _signed(p.south_longitude, 'E', 'W', 3),
+                       width, format_duration(p.duration_seconds),
+                       p.sun_altitude))
+    if band.truncated:
+        rows.append('   note: the band is wider than the search limit somewhere '
+                    'along the path')
+    return rows
+
+
+def _region_rows(region, timescale, path_rows):
+    """A region is an outline, so it is listed as bearings from its centre."""
+    rows = ['   deepest at %s %s;  outline given as bearings from there'
+            % (_signed(region.centre_latitude, 'N', 'S', 3),
+               _signed(region.centre_longitude, 'E', 'W', 3)),
+            '',
+            '   Bearing   Boundary point         Distance   Maximum there  Sun',
+            '-' * 100]
+    for p in _sample(region.points, path_rows):
+        rows.append('   %5.0f     %8s %9s     %6.0f km   %s      %4.0f'
+                    % (p.azimuth, _signed(p.latitude, 'N', 'S', 3),
+                       _signed(p.longitude, 'E', 'W', 3), p.distance_km,
+                       utc_clock(timescale, p.tt), p.sun_altitude))
+    if region.encloses_pole:
+        rows.append('   note: this region reaches over a pole')
+    rows.append('   note: where the Sun is on the horizon the edge is the '
+                'terminator, not a coverage contour')
+    return rows
 
 
 def dumps(data):

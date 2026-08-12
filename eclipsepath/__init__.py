@@ -8,11 +8,12 @@ Typical use::
 """
 
 from .catalog import search, TYPE_NAMES
-from .eclipse import Band, BandPoint, Eclipse, PathPoint, analyse
+from .eclipse import (Band, BandPoint, Eclipse, PathPoint, Region,
+                      RegionPoint, analyse)
 from .ephemeris import Ephemeris, EclipseWindow
 from .observer import circumstances_at
 
 __version__ = '1.0.0'
 __all__ = ['search', 'analyse', 'Eclipse', 'Band', 'BandPoint', 'PathPoint',
-           'Ephemeris', 'EclipseWindow', 'circumstances_at', 'TYPE_NAMES',
-           '__version__']
+           'Region', 'RegionPoint', 'Ephemeris', 'EclipseWindow',
+           'circumstances_at', 'TYPE_NAMES', '__version__']

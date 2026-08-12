@@ -38,6 +38,10 @@ CASES = [
      'delta_t': 71.4, 'label': '2026 Aug 12 total'},
     {'file': 'nasa_path_2026feb.json', 'date': (2026, 2, 17), 'kind': 'A',
      'delta_t': 74.7, 'label': '2026 Feb 17 annular'},
+    # A near-grazing total: the Sun is only about 11 degrees up along a path
+    # over 750 km wide, which is where a tangent-plane width is least reliable.
+    {'file': 'nasa_path_2033.json', 'date': (2033, 3, 30), 'kind': 'T',
+     'delta_t': 78.9, 'label': '2033 Mar 30 total (grazing)'},
 ]
 
 

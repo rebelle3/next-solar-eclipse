@@ -1,14 +1,17 @@
 """Full analysis of a single solar eclipse: circumstances, path and limits.
 
-The central idea is that everything is expressed as "maximum obscuration seen
-over the whole event", evaluated directly from vector geometry.  The visible
-region for a coverage threshold X is then
+Everything is expressed as "the deepest eclipse seen over the whole event",
+evaluated directly from vector geometry.  The area covered to at least a
+fraction X of the Sun is
 
     G(X) = { p on Earth : max_t obscuration(p, t) >= X }
 
-and its outline is traced by bisecting outwards from a spine that follows the
-darkest point on the globe from first to last contact.  For X = 1 the spine is
-the classic central line and G is the path of totality.
+and its outline is found by bisecting for the edge.  Where G is strip-shaped it
+is traced as a band, cutting across it from a track that follows the darkest
+point on the globe; the path of totality is that same construction under the
+umbral criterion, and is what X = 1 asks for on a total eclipse.  Where G is
+not strip-shaped it is traced as a closed region instead, swept out radially
+from the deepest point of the eclipse.
 """
 
 from __future__ import annotations
@@ -62,6 +65,36 @@ class BandPoint:
 
 
 @dataclass
+class RegionPoint:
+    """One vertex of a coverage region's outline."""
+    azimuth: float
+    distance_km: float
+    latitude: float
+    longitude: float
+    tt: float
+    sun_altitude: float
+
+
+@dataclass
+class Region:
+    """A closed area of the surface where a coverage threshold is met.
+
+    Used instead of a band wherever the area is not strip-shaped: below about
+    80% coverage it broadens into a blob thousands of kilometres across, and a
+    partial eclipse's is bounded on one side by the terminator, so "northern
+    and southern limits" would be meaningless for either.
+    """
+    label: str
+    points: List[RegionPoint] = field(default_factory=list)
+    centre_latitude: float = float('nan')
+    centre_longitude: float = float('nan')
+    encloses_pole: bool = False
+
+    def __bool__(self):
+        return bool(self.points)
+
+
+@dataclass
 class Band:
     """A strip of the Earth's surface where some depth criterion is met."""
     label: str
@@ -91,6 +124,7 @@ class Eclipse:
     path: List[PathPoint] = field(default_factory=list)
     central_band: Optional[Band] = None
     coverage_band: Optional[Band] = None
+    coverage_region: Optional[Region] = None
     central_duration_seconds: float = 0.0
     path_width_km: float = float('nan')
     peak_obscuration: float = 0.0
@@ -168,7 +202,7 @@ def analyse(ephem, event: RawEvent, threshold=1.0, samples=120,
     lat, lon, _ = g.itrf_to_geodetic(point)
     state = cc.state_at(window, point, tg)
 
-    kind = _classify(window, grid, event, state, bool(hit[0]))
+    kind = _classify(window, grid)
     lun = lunation_number(event.tt_greatest)
 
     eclipse = Eclipse(
@@ -194,7 +228,7 @@ def analyse(ephem, event: RawEvent, threshold=1.0, samples=120,
     return eclipse
 
 
-def _classify(window, grid, event, greatest_state, central):
+def _classify(window, grid):
     """T / A / H / P following the usual catalogue convention."""
     point, hit = shadow_point(window, grid)
     if not hit.any():
@@ -333,14 +367,26 @@ def _build_path(eclipse, window, grid, threshold, samples):
             window, coarse, central_tt, central_lat, central_lon,
             cc.central_depth, _central_label(eclipse))
 
-    if threshold > 0.0:
-        same = (eclipse.kind in ('T', 'H') and threshold >= 1.0
-                and eclipse.central_band is not None)
-        eclipse.coverage_band = (
-            eclipse.central_band if same else
-            _trace_band(window, coarse, tt, lat, lon,
-                        cc.obscuration_depth(threshold),
-                        '%g%% obscuration' % (threshold * 100)))
+    # At 100% on a total or hybrid eclipse the area wanted *is* the path of
+    # totality, so the band already describes it exactly.  Below that the area
+    # broadens, and past some point it stops being strip-shaped at all: a
+    # partial eclipse's is bounded by the terminator on one side.  Trace it as
+    # a band while the cross-sections really do cut across it, and as a closed
+    # region once they no longer do.
+    if threshold > 0.0 and eclipse.peak_obscuration >= threshold - 1e-12:
+        label = '%g%% obscuration' % (threshold * 100)
+        if threshold >= 1.0 and eclipse.central_band is not None:
+            eclipse.coverage_band = eclipse.central_band
+        else:
+            depth = cc.obscuration_depth(threshold)
+            probe = _probe_band(window, coarse, eclipse.tt_first_contact,
+                                eclipse.tt_last_contact, depth)
+            if _is_strip(probe):
+                eclipse.coverage_band = _trace_band(window, coarse, tt, lat, lon,
+                                                    depth, label)
+            else:
+                eclipse.coverage_region = _trace_region(
+                    window, coarse, eclipse.tt_greatest, threshold, label)
 
     _fill_greatest_metrics(eclipse, window, coarse)
 
@@ -419,6 +465,82 @@ def _cross_section_is_transverse(lat, lon, north_lat, north_lon,
     smaller = np.minimum(to_north, to_south)
     larger = np.maximum(to_north, to_south)
     return smaller >= BALANCE_LIMIT * np.maximum(larger, 1e-9)
+
+
+REGION_RAYS = 180
+REGION_LIMIT_KM = 16000.0
+STRIP_FRACTION = 0.7
+STRIP_PROBE_SAMPLES = 41
+
+
+def _probe_band(window, coarse, tt_lo, tt_hi, depth):
+    """A fixed trace used only to decide band versus region.
+
+    Both the number of cross-sections and the instants they are taken at are
+    fixed here.  Deciding from the requested trace instead would make the
+    choice depend on ``--samples``, flipping the representation of a borderline
+    threshold from one run to the next.
+    """
+    tt = np.linspace(tt_lo, tt_hi, STRIP_PROBE_SAMPLES)
+    point, _ = _track(window, tt)
+    lat, lon, _ = g.itrf_to_geodetic(point)
+    return _trace_band(window, coarse, tt, lat, lon, depth, 'probe')
+
+
+def _is_strip(band):
+    """Are enough of a band's cross-sections genuinely cutting across it?"""
+    if not band or len(band.points) < 4:
+        return False
+    transverse = sum(1 for point in band.points if point.transverse)
+    return transverse >= STRIP_FRACTION * len(band.points)
+
+
+def _trace_region(window, coarse, tt_centre, threshold, label,
+                  rays=REGION_RAYS, iterations=36):
+    """Outline of the area reaching ``threshold``, swept out from its centre.
+
+    Rays are cast from the deepest point of the eclipse and each is bisected
+    for where peak coverage falls through the threshold.  Coverage falls away
+    with distance from that point, so each ray crosses the edge once.  Part of
+    the outline is usually the terminator rather than a coverage contour, where
+    coverage drops abruptly to nothing because the Sun has set.
+    """
+    depth = cc.obscuration_depth(threshold)
+    centre, _ = _track(window, np.atleast_1d(tt_centre))
+    centre_lat, centre_lon, _ = g.itrf_to_geodetic(centre)
+    centre_lat, centre_lon = float(centre_lat[0]), float(centre_lon[0])
+
+    azimuth = np.linspace(0.0, 360.0, rays, endpoint=False)
+
+    def bisect(lo, hi):
+        for _ in range(iterations):
+            mid = 0.5 * (lo + hi)
+            mid_lat, mid_lon = g.great_circle_destination(centre_lat, centre_lon,
+                                                          azimuth, mid)
+            ok = _meets(window, coarse, mid_lat, mid_lon, depth)
+            lo = np.where(ok, mid, lo)
+            hi = np.where(ok, hi, mid)
+        return 0.5 * (lo + hi)
+
+    distance = bisect(np.zeros(rays), np.full(rays, REGION_LIMIT_KM))
+    edge_lat, edge_lon = g.great_circle_destination(centre_lat, centre_lon,
+                                                    azimuth, distance)
+    edge = cc.peak_eclipse(window, g.geodetic_to_itrf(edge_lat, edge_lon), coarse)
+
+    region = Region(label=label, centre_latitude=centre_lat,
+                    centre_longitude=centre_lon)
+    region.points = [
+        RegionPoint(azimuth=float(azimuth[i]), distance_km=float(distance[i]),
+                    latitude=float(edge_lat[i]), longitude=float(edge_lon[i]),
+                    tt=float(edge['t'][i]),
+                    sun_altitude=float(edge['sun_altitude'][i]))
+        for i in range(rays)]
+    # A region containing a pole cannot be drawn as a simple lat/lon ring, and
+    # the only way to know is to ask whether the pole itself is in it.
+    poles = _meets(window, coarse, np.array([90.0, -90.0]), np.array([0.0, 0.0]),
+                   depth)
+    region.encloses_pole = bool(poles.any())
+    return region
 
 
 def _meets(window, coarse, lat, lon, depth):

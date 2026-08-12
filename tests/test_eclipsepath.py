@@ -299,7 +299,7 @@ def test_band_widens_as_threshold_falls():
     event = finder.find_events(ephem, ts.utc(2026, 8, 1).tt,
                                ts.utc(2026, 8, 31).tt)[0]
     widths = []
-    for threshold in (1.0, 0.95, 0.8):
+    for threshold in (1.0, 0.95, 0.9):
         result = ec.analyse(ephem, event, threshold=threshold, samples=24)
         middle = result.coverage_band.points[len(result.coverage_band.points) // 2]
         widths.append(middle.width_km)
@@ -332,6 +332,146 @@ def test_path_sampling_does_not_move_the_path():
     assert abs(coarse.path_width_km - fine.path_width_km) < 0.01
     assert abs(coarse.central_duration_seconds
                - fine.central_duration_seconds) < 0.01
+
+
+def test_representation_does_not_depend_on_sampling():
+    """A borderline threshold must not flip between band and region."""
+    ephem = ephemeris()
+    ts = ephem.timescale
+    event = finder.find_events(ephem, ts.utc(2026, 8, 1).tt,
+                               ts.utc(2026, 8, 31).tt)[0]
+    for threshold in (0.9, 0.85, 0.8):
+        choices = set()
+        for samples in (16, 24, 40, 80):
+            result = ec.analyse(ephem, event, threshold=threshold,
+                                samples=samples)
+            choices.add(result.coverage_band is not None)
+        assert len(choices) == 1, 'threshold %g flipped: %s' % (threshold, choices)
+
+
+def test_region_replaces_the_band_once_it_stops_being_a_strip():
+    ephem = ephemeris()
+    ts = ephem.timescale
+    total = finder.find_events(ephem, ts.utc(2026, 8, 1).tt,
+                               ts.utc(2026, 8, 31).tt)[0]
+    partial = finder.find_events(ephem, ts.utc(2029, 1, 1).tt,
+                                 ts.utc(2029, 1, 31).tt)[0]
+    # Totality is a strip, so it stays a band.
+    strip = ec.analyse(ephem, total, threshold=1.0, samples=30)
+    assert strip.coverage_band is not None and strip.coverage_region is None
+    # A partial eclipse's coverage area never is.
+    blob = ec.analyse(ephem, partial, threshold=0.6, samples=30)
+    assert blob.coverage_band is None and blob.coverage_region is not None
+    assert blob.central_band is None
+    # Nothing is traced for a threshold the eclipse never reaches.
+    none = ec.analyse(ephem, partial, threshold=0.95, samples=30)
+    assert none.coverage_band is None and none.coverage_region is None
+
+
+def test_region_boundary_sits_on_the_threshold():
+    """Away from the terminator every vertex must be exactly on the contour."""
+    ephem = ephemeris()
+    ts = ephem.timescale
+    event = finder.find_events(ephem, ts.utc(2029, 1, 1).tt,
+                               ts.utc(2029, 1, 31).tt)[0]
+    result = ec.analyse(ephem, event, threshold=0.6, samples=30)
+    region = result.coverage_region
+    assert len(region.points) == ec.REGION_RAYS
+    grid = np.linspace(result.tt_first_contact, result.tt_last_contact,
+                       ec.PREDICATE_TIME_SAMPLES)
+    def peak_at(lat, lon):
+        return cc.peak_eclipse(result.window, g.geodetic_to_itrf(lat, lon),
+                               grid)['obscuration'][0]
+
+    def peak_along(point, offset):
+        return peak_at(*g.great_circle_destination(
+            region.centre_latitude, region.centre_longitude,
+            point.azimuth, point.distance_km + offset))
+
+    checked, grazing = 0, 0
+    for point in region.points:
+        inward = peak_along(point, -0.5)
+        outward = peak_along(point, +0.5)
+        holds = inward >= 0.6 and outward < 0.6
+        if point.sun_altitude > 5.0:
+            # Away from the terminator the edge is exact: the threshold is met
+            # just inside it and not met just outside.
+            assert holds, (point.azimuth, inward, outward)
+            checked += 1
+        else:
+            # Near the terminator peak coverage is nearly flat, so the edge is
+            # poorly conditioned and may wobble by a few kilometres.  Anything
+            # that fails the invariant has to be here, not out in the open.
+            grazing += 1
+    assert checked > 40, 'expected much of the outline to be a clean contour'
+    assert grazing, 'expected part of the outline to run along the terminator'
+    assert result.coverage_region.centre_latitude == region.centre_latitude
+    centre = cc.peak_eclipse(result.window,
+                             g.geodetic_to_itrf(region.centre_latitude,
+                                                region.centre_longitude),
+                             grid)['obscuration'][0]
+    assert centre >= 0.6
+
+
+def test_region_detects_a_pole_inside_it():
+    ephem = ephemeris()
+    ts = ephem.timescale
+    event = finder.find_events(ephem, ts.utc(2029, 6, 1).tt,
+                               ts.utc(2029, 6, 30).tt)[0]
+    checked = False
+    for threshold, expected in ((0.20, False), (0.15, True)):
+        result = ec.analyse(ephem, event, threshold=threshold, samples=20)
+        assert result.coverage_region.encloses_pole is expected, threshold
+        if not checked:
+            checked = True
+            grid = np.linspace(result.tt_first_contact, result.tt_last_contact,
+                               ec.PREDICATE_TIME_SAMPLES)
+            pole = cc.peak_eclipse(result.window, g.geodetic_to_itrf(90.0, 0.0),
+                                   grid)['obscuration'][0]
+            assert 0.15 < pole < 0.20, pole
+
+
+def test_region_outputs():
+    ephem = ephemeris()
+    ts = ephem.timescale
+    event = finder.find_events(ephem, ts.utc(2029, 1, 1).tt,
+                               ts.utc(2029, 1, 31).tt)[0]
+    result = ec.analyse(ephem, event, threshold=0.6, samples=30)
+    collection = output.to_geojson([result], ts)
+    kinds = [f['properties']['feature'] for f in collection['features']]
+    assert 'coverage-region' in kinds
+    for feature in collection['features']:
+        if feature['properties']['feature'] != 'coverage-region':
+            continue
+        coords = feature['geometry']['coordinates']
+        steps = [abs(coords[i][0] - coords[i - 1][0])
+                 for i in range(1, len(coords))]
+        assert not steps or max(steps) < 180.0
+    rows = output.to_csv([result], ts).strip().split('\n')
+    assert rows[0] == ','.join(output.CSV_COLUMNS)
+    assert all(row.split(',')[3] == 'boundary' for row in rows[1:])
+    assert len(rows) - 1 == len(result.coverage_region.points)
+    detail = output.to_json([result], ts)['eclipses'][0]
+    assert [x['kind'] for x in detail['geometries']] == ['region']
+    assert len(detail['geometries'][0]['boundary']) == ec.REGION_RAYS
+    text = output.format_text([result], ts, 0.6, path_rows=5)
+    assert 'region of 60% obscuration' in text
+    assert 'terminator' in text
+
+
+def test_both_path_and_region_are_reported_together():
+    """A central eclipse filtered at a lower threshold keeps its path too."""
+    ephem = ephemeris()
+    ts = ephem.timescale
+    event = finder.find_events(ephem, ts.utc(2026, 2, 1).tt,
+                               ts.utc(2026, 2, 28).tt)[0]
+    result = ec.analyse(ephem, event, threshold=0.6, samples=30)
+    assert result.central_band.label == 'annularity'
+    assert result.coverage_region is not None
+    products = output.geometries(result)
+    assert len(products) == 2
+    assert [output.is_region(x) for x in products] == [False, True]
+
 
 
 # --- observers --------------------------------------------------------------
@@ -431,7 +571,8 @@ def test_csv_rows_match_the_band():
     assert len(lines) - 1 == len(result.coverage_band.points)
     first = lines[1].split(',')
     assert first[0] == '2026-08-12' and first[1] == 'T'
-    assert abs(float(first[4]) - result.coverage_band.points[0].latitude) < 1e-4
+    assert first[3] == 'cross-section'
+    assert abs(float(first[5]) - result.coverage_band.points[0].latitude) < 1e-4
 
 
 def test_json_round_trips():

@@ -23,7 +23,7 @@ def build_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='examples:\n'
                '  eclipsepath                             next 10 years of total eclipses\n'
-               '  eclipsepath --coverage 90               anywhere reaching 90%% coverage\n'
+               '  eclipsepath --coverage 90               anywhere reaching 90% coverage\n'
                '  eclipsepath --years 3 --format geojson  paths as GeoJSON for a map\n'
                '  eclipsepath --at 51.48,-3.18            what Cardiff sees each time\n')
     when = parser.add_argument_group('time span')

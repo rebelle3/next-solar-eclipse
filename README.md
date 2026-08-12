@@ -61,6 +61,27 @@ whole disc, so at its very deepest a few percent of the Sun is still showing as
 a ring. Annular and hybrid eclipses still have their full antumbral/umbral path
 computed — drop the filter to about 85% to bring them in.
 
+### Paths and regions
+
+Two different shapes come out, and which one you get depends on the geometry
+rather than on any option:
+
+* A **path** is a strip: a centre line with a northern and a southern limit, a
+  width and a duration at each cross-section. The path of totality, or of
+  annularity, is always traced for a central eclipse, and it is exactly what
+  `--coverage 100` asks for.
+* A **region** is a closed outline, given as bearings and distances from the
+  deepest point. Coverage areas broaden fast as the threshold drops — the 2026
+  Aug 12 eclipse covers 90% of the Sun over a swath 1700 km wide — and below
+  roughly 80%, or for any partial eclipse, the area stops being strip-shaped
+  at all. Calling its edges "northern and southern limits" would then be
+  meaningless, so it is traced as a region instead.
+
+Part of a region's outline is usually the terminator rather than a coverage
+contour: past it the Sun has set and coverage drops straight to nothing. Ask
+for a coverage threshold on a central eclipse and you get both — the path of
+totality or annularity, and the wider region meeting your threshold.
+
 As a library:
 
 ```python
@@ -76,11 +97,13 @@ for eclipse in search('2026-08-12', years=10, threshold=1.0):
 
 ### GeoJSON
 
-Each eclipse becomes a `greatest-eclipse` point, a `shadow-track` line, and —
-for anything reaching the threshold — `centre-line`, `northern-limit` and
-`southern-limit` lines plus a filled `band` polygon. Every line feature carries
-a `times` array parallel to its coordinates. Geometries are cut where they
-cross the antimeridian so nothing is drawn the wrong way round the globe.
+Each eclipse becomes a `greatest-eclipse` point and a `shadow-track` line.
+A path adds `centre-line`, `northern-limit` and `southern-limit` lines plus a
+filled `band` polygon; a region adds a closed `coverage-region` line, and a
+`region-area` polygon when it neither wraps the antimeridian nor reaches over
+a pole. Every line feature carries a `times` array parallel to its coordinates.
+Geometries are cut where they cross the antimeridian so nothing is drawn the
+wrong way round the globe.
 
 ## How it works
 
@@ -108,14 +131,17 @@ sees.
    shadow axis pierces the WGS84 ellipsoid. When the axis misses the Earth
    entirely, as it does throughout a partial eclipse, a pattern search on the
    surface finds the deepest point instead, so the track stays defined.
-5. **The band.** The region for a threshold X is `{p : max over t of
-   obscuration(p, t) >= X}`. Its edges are found by bisecting outwards from the
-   track along the perpendicular to the shadow's motion — the perpendicular
-   comes from the shadow's velocity over a two-second baseline, since a track
-   passing near a pole can swing tens of degrees in a couple of minutes. The
-   path of totality is the same construction with the umbral criterion, "the
-   Moon's disc lies wholly inside the Sun's, or wholly contains it", which is
-   also what gives an annular eclipse its path.
+5. **The area.** What is wanted for a threshold X is `{p : max over t of
+   obscuration(p, t) >= X}`. As a path, its edges are found by bisecting
+   outwards from the track along the perpendicular to the shadow's motion — the
+   perpendicular comes from the shadow's velocity over a two-second baseline,
+   since a track passing near a pole can swing tens of degrees in a couple of
+   minutes. The path of totality is the same construction under the umbral
+   criterion, "the Moon's disc lies wholly inside the Sun's, or wholly contains
+   it", which is also what gives an annular eclipse its path. As a region, rays
+   are cast from the deepest point of the eclipse and each is bisected for
+   where coverage falls through the threshold. Which of the two is used is
+   decided from a fixed-size probe, so it never depends on `--samples`.
 
 Inside each eclipse the Sun, Moon and Earth-orientation are modelled by
 Chebyshev series fitted to exact values, accurate to under a centimetre for the
@@ -159,19 +185,20 @@ total, annular, hybrid or partial, with:
 | Central duration | within 0.6 s |
 | Saros and lunation number | exact |
 
-Against the 2026 Aug 12 (total) and 2026 Feb 17 (annular) path tables, over the
-body of each path:
+Against three published path tables — 2026 Aug 12 (total), 2026 Feb 17
+(annular) and 2033 Mar 30 (a near-grazing total, the Sun only 11 degrees up
+along a path 780 km wide) — over the body of each path:
 
 | Quantity | Mean | Worst |
 | --- | --- | --- |
-| Centre line | 0.14 / 0.28 km | 2.0 km |
-| Northern limit | 0.63 / 0.54 km | 1.2 km |
-| Southern limit | 0.44 / 1.09 km | 1.9 km |
-| Path width | 0.45 / 1.08 km | 3.0 km |
-| Central duration | 0.08 / 0.07 s | 0.12 s |
+| Centre line | 0.14 - 0.60 km | 2.0 km |
+| Northern limit | 0.54 - 1.00 km | 1.8 km |
+| Southern limit | 0.33 - 1.09 km | 1.9 km |
+| Path width | 0.45 - 1.08 km | 3.0 km |
+| Central duration | 0.07 - 0.09 s | 0.13 s |
 | Moon/Sun diameter ratio | exact to the tabulated 3 decimals | |
 
-(means given as total / annular)
+(ranges span the three eclipses)
 
 The residual kilometre is about what the different ephemerides account for:
 those NASA tables were computed with VSOP87/ELP2000-85 rather than DE440.
@@ -192,6 +219,15 @@ the eclipse this project was written the day of — comes out as 93.24% at
   meets the terminator the perpendicular runs along the edge of the band rather
   than across it; those rows show `-` instead of a number several times too
   large. Their limit coordinates are still real points on the boundary.
+* **A region's outline is traced radially**, which assumes coverage falls away
+  from the deepest point along each bearing. That holds for the blob-shaped
+  areas regions are used for; long curved swathes are traced as paths instead,
+  precisely because a radial sweep would cut their corners.
+* **A region's edge is exact except in the grazing zone.** Wherever the Sun is
+  properly up, the threshold is met immediately inside the outline and not met
+  immediately outside it. Within a degree or so of the horizon peak coverage
+  goes nearly flat, so the edge there is only good to a few kilometres — and
+  neglected refraction moves the terminator by far more than that regardless.
 * **Delta-T limits long-range accuracy.** The difference between Terrestrial
   Time and universal time cannot be predicted years ahead. It does not affect
   TT timings or latitudes, but it slides a path in longitude by about 0.46 km
@@ -208,9 +244,12 @@ the eclipse this project was written the day of — comes out as 93.24% at
 ## Tests
 
 ```
-python3 tests/test_eclipsepath.py        # 33 tests, also runs under pytest
+python3 tests/test_eclipsepath.py        # 39 tests, also runs under pytest
 python3 tests/verify_against_nasa.py     # row-by-row against NASA path tables
 ```
+
+The first takes a few minutes: most of it recomputes the whole 2026-2036 scan
+and traces real paths rather than mocking any of it.
 
 Set `ECLIPSEPATH_KERNEL` or pass the kernel path to reuse an existing download.
 
@@ -219,5 +258,6 @@ Set `ECLIPSEPATH_KERNEL` or pass the kernel path to reuse an existing download.
 * [NASA Five Millennium Catalog of Solar Eclipses](https://eclipse.gsfc.nasa.gov/SEcat5/SE2001-2100.html) — Espenak & Meeus
 * [NASA path table, 2026 Aug 12](https://eclipse.gsfc.nasa.gov/SEpath/SEpath2001/SE2026Aug12Tpath.html)
 * [NASA path table, 2026 Feb 17](https://eclipse.gsfc.nasa.gov/SEpath/SEpath2001/SE2026Feb17Apath.html)
+* [NASA path table, 2033 Mar 30](https://eclipse.gsfc.nasa.gov/SEpath/SEpath2001/SE2033Mar30Tpath.html)
 * [Mean lunar radius and the two values of k](https://www.eclipsewise.com/solar/SEhelp/SEradius.html)
 * [JPL DE440 ephemeris](https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/)
