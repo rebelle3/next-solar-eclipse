@@ -206,6 +206,27 @@ def test_path_width_and_duration_match_catalog():
             '%s: %.1f vs %d' % (ref['date'], result.path_width_km, ref['width']))
 
 
+def test_non_central_annular_is_not_called_partial():
+    """The axis can miss the globe while the antumbra still grazes it.
+
+    Four such eclipses fall in the next century.  Judging them on magnitude
+    alone called every one partial, which is right when the Moon is the larger
+    disc and wrong when it is the smaller, because then the magnitude never
+    reaches 1 however much of the antumbra lands.
+    """
+    ephem = ephemeris()
+    ts = ephem.timescale
+    for date, expected in (((2043, 10, 3), 'A'), ((2104, 12, 17), 'A'),
+                           ((2122, 12, 28), 'A'), ((2126, 4, 22), 'A'),
+                           ((2043, 4, 9), 'T')):
+        year, month, day = date
+        event = finder.find_events(ephem, ts.utc(year, month, day - 2).tt,
+                                   ts.utc(year, month, day + 2).tt)[0]
+        result = ec.analyse(ephem, event, samples=3, trace_limits=False)
+        assert result.kind == expected, (date, result.kind, expected)
+        assert not result.central, date
+
+
 def test_partial_eclipses_have_no_central_path():
     ephem = ephemeris()
     for event, ref in zip(scanned(), reference()):

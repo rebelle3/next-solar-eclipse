@@ -224,8 +224,17 @@ def _classify(window, grid):
     """T / A / H / P following the usual catalogue convention."""
     point, hit = shadow_point(window, grid)
     if not hit.any():
-        mag = cc.state_at(window, point, grid)['magnitude']
-        return 'T' if np.nanmax(mag) >= 1.0 else 'P'
+        # The axis misses the globe, but the cone can still graze it near a
+        # limb — a non-central total or annular eclipse.  Deciding on
+        # magnitude alone calls every one of those partial, which is right for
+        # the total case and wrong for the annular one, where the Moon is the
+        # smaller disc and the magnitude never reaches 1.
+        state = cc.state_at(window, point, grid)
+        central = (np.abs(state['r_moon'] - state['r_sun'])
+                   - state['separation']) >= 0.0
+        if not np.any(central):
+            return 'P'
+        return 'T' if np.nanmax(state['magnitude']) >= 1.0 else 'A'
     signs = umbra_sign(window, grid, point)[hit]
     if (signs > 0).any() and (signs < 0).any():
         return 'H'
