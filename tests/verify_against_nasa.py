@@ -54,9 +54,46 @@ def julian_day(year, month, day, hour, minute):
     return jdn - 0.5 + (hour + minute / 60.0) / 24.0
 
 
+def densify(lat, lon, spacing_km=0.25):
+    """Resample a lat/lon polyline along great circles to a target spacing.
+
+    Two errors are being avoided.  Interpolating linearly in latitude and
+    longitude would cut a large chord wherever the line is strongly bent, which
+    near a pole dwarfs anything measured against the result.  And because
+    :func:`distance_to_polyline` only sees the sample points, a coarse spacing
+    ``s`` inflates a true distance ``d`` to roughly ``hypot(d, s/2)``, so the
+    spacing has to stay well below the distances of interest.
+    """
+    lat = np.asarray(lat, float)
+    lon = np.asarray(lon, float)
+    if lat.size < 2:
+        return lat, lon
+    unit_xyz = g.unit(g.geodetic_to_itrf(lat, lon))
+    out_lat, out_lon = [], []
+    for i in range(lat.size - 1):
+        a, b = unit_xyz[:, i], unit_xyz[:, i + 1]
+        angle = np.arccos(np.clip(np.dot(a, b), -1.0, 1.0))
+        steps = max(2, int(np.ceil(angle * g.EARTH_A_KM / spacing_km)) + 1)
+        fraction = np.linspace(0.0, 1.0, steps)
+        if angle < 1e-12:
+            points = np.outer(a, np.ones(steps))
+        else:
+            points = (np.sin((1.0 - fraction) * angle) * a[:, None]
+                      + np.sin(fraction * angle) * b[:, None]) / np.sin(angle)
+        piece_lat, piece_lon, _ = g.itrf_to_geodetic(points * g.EARTH_A_KM)
+        out_lat.append(piece_lat)
+        out_lon.append(piece_lon)
+    return np.concatenate(out_lat), np.concatenate(out_lon)
+
+
+def distance_to_polyline(lat, lon, curve_lat, curve_lon):
+    """Shortest distance from a point to an already densified polyline."""
+    return float(g.geodesic_distance(lat, lon, curve_lat, curve_lon).min())
+
+
 def polyline_distance_km(lat, lon, curve):
     """Shortest distance from a point to an already densified polyline."""
-    return g.distance_to_polyline(lat, lon, curve[0], curve[1])
+    return distance_to_polyline(lat, lon, curve[0], curve[1])
 
 
 def run_case(ephem, case, verbose=True):
@@ -82,15 +119,15 @@ def run_case(ephem, case, verbose=True):
     state = cc.state_at(window, point, tt)
     band = ec._trace_band(window, coarse, tt, lat, lon, cc.central_depth, 'central')
     by_index = {}
-    inside = ec._meets(window, coarse, lat, lon, cc.central_depth)
+    inside = cc.reaches(window, coarse, lat, lon, cc.central_depth)
     for point_index, sample in zip(np.nonzero(inside)[0], band.points):
         by_index[int(point_index)] = sample
 
     # NASA samples its limit curves every couple of minutes; resampling along
     # great circles keeps a point-to-curve distance meaningful near a pole.
-    ref_n = g.densify([r['n_lat'] for r in rows], [r['n_lon'] for r in rows])
-    ref_s = g.densify([r['s_lat'] for r in rows], [r['s_lon'] for r in rows])
-    ref_c = g.densify([r['c_lat'] for r in rows], [r['c_lon'] for r in rows])
+    ref_n = densify([r['n_lat'] for r in rows], [r['n_lon'] for r in rows])
+    ref_s = densify([r['s_lat'] for r in rows], [r['s_lon'] for r in rows])
+    ref_c = densify([r['c_lat'] for r in rows], [r['c_lon'] for r in rows])
 
     stats = {'central': [], 'north': [], 'south': [], 'width': [], 'duration': [],
              'ratio': [], 'altitude': []}

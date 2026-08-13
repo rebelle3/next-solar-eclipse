@@ -23,19 +23,11 @@ import numpy as np
 
 from . import circumstances as cc
 from . import geometry as g
+from .contour import REGION_RAYS, Region, RegionPoint, trace_region
 from .ephemeris import EclipseWindow
 from .finder import RawEvent, axis_metrics
 
 WINDOW_PAD_DAYS = 6.0 / 1440.0
-REGION_RAYS = 180
-REGION_LIMIT_KM = 16000.0
-REGION_GAP_FRACTION = 0.02      # of the outline's mean reach
-REGION_MIN_GAP_KM = 25.0
-REGION_MAX_GAP_KM = 150.0
-REGION_VERTEX_BUDGET = 6.0     # cap on growth, as a multiple of rays
-REGION_REFINE_ROUNDS = 9
-REGION_PROBE_KM = 10.0         # step used to look past a crossing
-REGION_PROBE_STEPS = 20
 SEARCH_LIMIT_KM = 12000.0
 NEW_MOON_EPOCH_TT = 2451550.09766   # 2000 Jan 6 new moon, TT Julian day
 SYNODIC_MONTH = 29.530588861
@@ -71,37 +63,6 @@ class BandPoint:
     tt_start: float
     tt_end: float
     transverse: bool = True
-
-
-@dataclass
-class RegionPoint:
-    """One vertex of a coverage region's outline."""
-    azimuth: float
-    distance_km: float
-    latitude: float
-    longitude: float
-    tt: float
-    sun_altitude: float
-
-
-@dataclass
-class Region:
-    """A closed area of the surface where a coverage threshold is met.
-
-    Used instead of a band wherever the area is not strip-shaped: below about
-    80% coverage it broadens into a blob thousands of kilometres across, and a
-    partial eclipse's is bounded on one side by the terminator, so "northern
-    and southern limits" would be meaningless for either.
-    """
-    label: str
-    points: List[RegionPoint] = field(default_factory=list)
-    centre_latitude: float = float('nan')
-    centre_longitude: float = float('nan')
-    encloses_pole: bool = False
-    max_gap_km: float = float('nan')
-
-    def __bool__(self):
-        return bool(self.points)
 
 
 @dataclass
@@ -252,8 +213,11 @@ def coverage_region(eclipse, threshold, rays=REGION_RAYS):
         return None
     coarse = np.linspace(eclipse.tt_first_contact, eclipse.tt_last_contact,
                          PREDICATE_TIME_SAMPLES)
-    return _trace_region(eclipse.window, coarse, eclipse.tt_greatest, threshold,
-                         '%g%% obscuration' % (threshold * 100), rays=rays)
+    centre, _ = _track(eclipse.window, np.atleast_1d(eclipse.tt_greatest))
+    lat, lon, _ = g.itrf_to_geodetic(centre)
+    return trace_region(eclipse.window, coarse, lat[0], lon[0],
+                        cc.obscuration_depth(threshold),
+                        '%g%% obscuration' % (threshold * 100), rays=rays)
 
 
 def _classify(window, grid):
@@ -414,8 +378,10 @@ def _build_path(eclipse, window, grid, threshold, samples, region_rays):
                 eclipse.coverage_band = _trace_band(window, coarse, tt, lat, lon,
                                                     depth, label)
             else:
-                eclipse.coverage_region = _trace_region(
-                    window, coarse, eclipse.tt_greatest, threshold, label,
+                centre, _ = _track(window, np.atleast_1d(eclipse.tt_greatest))
+                centre_lat, centre_lon, _ = g.itrf_to_geodetic(centre)
+                eclipse.coverage_region = trace_region(
+                    window, coarse, centre_lat[0], centre_lon[0], depth, label,
                     rays=region_rays)
 
     _fill_greatest_metrics(eclipse, window, coarse)
@@ -430,7 +396,7 @@ def _trace_band(window, coarse, tt, lat, lon, depth, label, iterations=36):
     """Trace the edges of the region where ``depth`` is met, per track sample."""
     n = len(tt)
     heading = _spine_heading(window, tt)
-    inside = _meets(window, coarse, lat, lon, depth)
+    inside = cc.reaches(window, coarse, lat, lon, depth)
     if not inside.any():
         return Band(label=label)
 
@@ -440,11 +406,11 @@ def _trace_band(window, coarse, tt, lat, lon, depth, label, iterations=36):
         lo = np.zeros(n)
         hi = np.full(n, SEARCH_LIMIT_KM)
         far_lat, far_lon = g.great_circle_destination(lat, lon, bearing, hi)
-        capped |= _meets(window, coarse, far_lat, far_lon, depth)
+        capped |= cc.reaches(window, coarse, far_lat, far_lon, depth)
         for _ in range(iterations):
             mid = 0.5 * (lo + hi)
             m_lat, m_lon = g.great_circle_destination(lat, lon, bearing, mid)
-            ok = _meets(window, coarse, m_lat, m_lon, depth)
+            ok = cc.reaches(window, coarse, m_lat, m_lon, depth)
             lo = np.where(ok, mid, lo)
             hi = np.where(ok, hi, mid)
         distance = 0.5 * (lo + hi)
@@ -521,117 +487,6 @@ def _is_strip(band):
         return False
     transverse = sum(1 for point in band.points if point.transverse)
     return transverse >= STRIP_FRACTION * len(band.points)
-
-
-def _trace_region(window, coarse, tt_centre, threshold, label,
-                  rays=REGION_RAYS, iterations=30, max_gap_km=None,
-                  max_vertices=None):
-    """Outline of the area reaching ``threshold``, swept out from its centre.
-
-    Rays are cast from the deepest point of the eclipse and each is searched
-    for where coverage falls through the threshold.  Part of the outline is
-    usually the terminator rather than a coverage contour, where coverage stops
-    abruptly because the Sun has set rather than thinning.
-
-    Evenly spaced rays are not enough.  These areas are long and thin, so
-    towards their two ends the edge runs steeply against the bearing — measured
-    on the 2027 eclipse it moves 892 km per degree — and evenly spaced rays
-    land far enough apart there to draw the edge as a row of facets.  Steep is
-    not discontinuous though, so halving the spacing halves the gap: rays are
-    added between the widest-separated neighbours, round after round, and the
-    gap closes.  Each round refines only the worst gaps, because that sector
-    needs depth rather than breadth.
-    """
-    depth = cc.obscuration_depth(threshold)
-    centre, _ = _track(window, np.atleast_1d(tt_centre))
-    centre_lat, centre_lon, _ = g.itrf_to_geodetic(centre)
-    centre_lat, centre_lon = float(centre_lat[0]), float(centre_lon[0])
-
-    def bisect(azimuth, lo, hi):
-        for _ in range(iterations):
-            mid = 0.5 * (lo + hi)
-            mid_lat, mid_lon = g.great_circle_destination(centre_lat, centre_lon,
-                                                          azimuth, mid)
-            ok = _meets(window, coarse, mid_lat, mid_lon, depth)
-            lo = np.where(ok, mid, lo)
-            hi = np.where(ok, hi, mid)
-        return 0.5 * (lo + hi)
-
-    def edge_at(azimuth):
-        """Distance to the *outermost* edge along each bearing.
-
-        Bisection alone finds an edge, not the last one.  Near the terminator
-        coverage can dip through the threshold and back within a few
-        kilometres, so a ray crosses three or more times; neighbouring rays
-        then settle on different crossings and the outline picks up a wobble of
-        tens of kilometres.  Probing outwards from the crossing found settles
-        which one is last.
-        """
-        distance = bisect(azimuth, np.zeros(len(azimuth)),
-                          np.full(len(azimuth), REGION_LIMIT_KM))
-        steps = np.arange(1, REGION_PROBE_STEPS + 1) * REGION_PROBE_KM
-        probe = distance[:, None] + steps
-        probe_lat, probe_lon = g.great_circle_destination(
-            centre_lat, centre_lon, azimuth[:, None], probe)
-        beyond = _meets(window, coarse, probe_lat.ravel(),
-                        probe_lon.ravel(), depth).reshape(probe.shape)
-        if not beyond.any():
-            return distance
-        # The last probe still inside sits on the outermost lobe; re-bisect
-        # between it and the next probe out, which is beyond the lobe.
-        found = beyond.any(axis=1)
-        last = beyond.shape[1] - 1 - np.argmax(beyond[:, ::-1], axis=1)
-        inside = distance + (last + 1) * REGION_PROBE_KM
-        further = bisect(azimuth, inside, inside + REGION_PROBE_KM)
-        return np.where(found, further, distance)
-
-    azimuth = np.linspace(0.0, 360.0, rays, endpoint=False)
-    distance = edge_at(azimuth)
-    if max_vertices is None:
-        max_vertices = int(rays * REGION_VERTEX_BUDGET)
-    if max_gap_km is None:
-        max_gap_km = float(np.clip(REGION_GAP_FRACTION * distance.mean(),
-                                   REGION_MIN_GAP_KM, REGION_MAX_GAP_KM))
-
-    for _ in range(REGION_REFINE_ROUNDS):
-        if len(azimuth) >= max_vertices:
-            break
-        lat, lon = g.great_circle_destination(centre_lat, centre_lon,
-                                              azimuth, distance)
-        gap = g.geodesic_distance(lat, lon, np.roll(lat, -1), np.roll(lon, -1))
-        wide = np.nonzero(gap > max_gap_km)[0]
-        if not len(wide):
-            break
-        room = min(max(8, len(azimuth) // 2), max_vertices - len(azimuth))
-        wide = wide[np.argsort(gap[wide])[::-1][:room]]
-        span = (np.roll(azimuth, -1)[wide] - azimuth[wide]) % 360.0
-        middle = (azimuth[wide] + span / 2.0) % 360.0
-        azimuth = np.concatenate([azimuth, middle])
-        distance = np.concatenate([distance, edge_at(middle)])
-        order = np.argsort(azimuth)
-        azimuth, distance = azimuth[order], distance[order]
-
-    edge_lat, edge_lon = g.great_circle_destination(centre_lat, centre_lon,
-                                                    azimuth, distance)
-    edge = cc.peak_eclipse(window, g.geodetic_to_itrf(edge_lat, edge_lon), coarse)
-
-    region = Region(label=label, centre_latitude=centre_lat,
-                    centre_longitude=centre_lon, max_gap_km=max_gap_km)
-    region.points = [
-        RegionPoint(azimuth=float(azimuth[i]), distance_km=float(distance[i]),
-                    latitude=float(edge_lat[i]), longitude=float(edge_lon[i]),
-                    tt=float(edge['t'][i]),
-                    sun_altitude=float(edge['sun_altitude'][i]))
-        for i in range(len(azimuth))]
-    poles = _meets(window, coarse, np.array([90.0, -90.0]), np.array([0.0, 0.0]),
-                   depth)
-    region.encloses_pole = bool(poles.any())
-    return region
-
-
-def _meets(window, coarse, lat, lon, depth):
-    xyz = g.geodetic_to_itrf(lat, lon)
-    return cc.peak_eclipse(window, xyz, coarse, depth=depth)['depth'] >= 0.0
 
 
 HEADING_DELTA_DAYS = 2.0 / 86400.0

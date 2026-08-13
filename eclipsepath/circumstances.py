@@ -266,3 +266,9 @@ def _inner_func(window, col):
         r_sun, r_moon, sep, _ = observe(window, tt, col[:, :, None])
         return (sep - np.abs(r_moon - r_sun))[0]
     return f
+
+
+def reaches(window, tt_grid, latitude, longitude, depth):
+    """Does the deepest eclipse at these places satisfy ``depth``?"""
+    xyz = g.geodetic_to_itrf(latitude, longitude)
+    return peak_eclipse(window, xyz, tt_grid, depth=depth)['depth'] >= 0.0

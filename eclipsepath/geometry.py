@@ -297,43 +297,6 @@ def initial_bearing(lat1, lon1, lat2, lon2):
     return (np.degrees(np.arctan2(y, x)) + 360.0) % 360.0
 
 
-def densify(lat, lon, spacing_km=0.25):
-    """Resample a lat/lon polyline along great circles to a target spacing.
-
-    Two errors are being avoided.  Interpolating linearly in latitude and
-    longitude would cut a large chord wherever the line is strongly bent, which
-    near a pole dwarfs anything measured against the result.  And because
-    :func:`distance_to_polyline` only sees the sample points, a coarse spacing
-    ``s`` inflates a true distance ``d`` to roughly ``hypot(d, s/2)``, so the
-    spacing has to stay well below the distances of interest.
-    """
-    lat = np.asarray(lat, float)
-    lon = np.asarray(lon, float)
-    if lat.size < 2:
-        return lat, lon
-    unit_xyz = unit(geodetic_to_itrf(lat, lon))
-    out_lat, out_lon = [], []
-    for i in range(lat.size - 1):
-        a, b = unit_xyz[:, i], unit_xyz[:, i + 1]
-        angle = np.arccos(np.clip(np.dot(a, b), -1.0, 1.0))
-        steps = max(2, int(np.ceil(angle * EARTH_A_KM / spacing_km)) + 1)
-        fraction = np.linspace(0.0, 1.0, steps)
-        if angle < 1e-12:
-            points = np.outer(a, np.ones(steps))
-        else:
-            points = (np.sin((1.0 - fraction) * angle) * a[:, None]
-                      + np.sin(fraction * angle) * b[:, None]) / np.sin(angle)
-        piece_lat, piece_lon, _ = itrf_to_geodetic(points * EARTH_A_KM)
-        out_lat.append(piece_lat)
-        out_lon.append(piece_lon)
-    return np.concatenate(out_lat), np.concatenate(out_lon)
-
-
-def distance_to_polyline(lat, lon, curve_lat, curve_lon):
-    """Shortest distance from a point to an already densified polyline."""
-    return float(geodesic_distance(lat, lon, curve_lat, curve_lon).min())
-
-
 def geodesic_distance(lat1, lon1, lat2, lon2):
     """Vincenty inverse distance in km on the reference ellipsoid."""
     lat1, lon1, lat2, lon2 = np.broadcast_arrays(
