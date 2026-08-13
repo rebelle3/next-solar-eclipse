@@ -18,7 +18,15 @@
            background: color-mix(in srgb, var(--panel) 92%, transparent);
            border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px;
            backdrop-filter: blur(6px); }
-  h1 { font-size: 16px; margin: 0 0 2px; font-weight: 600; }
+  /* Collapsed, the panel is a clock and a way back. On a phone the open panel
+     covers most of the globe, and a control you cannot put away is worse than
+     one you have to fetch. */
+  #panel.shut { width: auto; padding: 9px 12px; }
+  #panel.shut .foldable { display: none; }
+  #panel.shut .clock { margin: 0 78px 0 0; font-size: 17px; }
+  #toggle { position: absolute; top: 10px; right: 10px; padding: 3px 10px;
+            font-size: 12px; }
+  h1 { font-size: 16px; margin: 0 0 2px; font-weight: 600; padding-right: 58px; }
   .sub { color: var(--ink-2); font-size: 12px; margin: 0 0 12px; }
   .clock { font: 600 20px/1.2 ui-monospace, monospace; margin: 8px 0 2px; }
   .reads { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px;
@@ -35,37 +43,44 @@
           font-size: 11px; color: var(--ink-2); }
   #error { position: fixed; inset: 0; display: none; place-content: center;
            padding: 40px; text-align: center; color: var(--ink-2); }
+  button:focus-visible, input:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px; }
+  @media (max-width: 720px) {
+    #panel { left: 12px; top: 12px; right: 12px; width: auto; }
+    #panel.shut { right: auto; }
+  }
 </style>
 </head>
 <body>
 <div id="stage"><canvas id="gl"></canvas></div>
 <div id="error"></div>
 <div id="panel">
-  <h1 id="title">Eclipse</h1>
-  <p class="sub" id="standfirst"></p>
+  <button id="toggle" type="button" aria-controls="panel" aria-expanded="true">Hide</button>
+  <h1 id="title" class="foldable">Eclipse</h1>
+  <p class="sub foldable" id="standfirst"></p>
   <div class="clock" id="clock">--:--:--</div>
-  <input type="range" id="scrub" min="0" max="1000" value="0" step="1">
-  <div class="row">
+  <input class="foldable" type="range" id="scrub" min="0" max="1000" value="0" step="1">
+  <div class="row foldable">
     <button id="play">Play</button>
     <button id="slower">&minus;</button>
     <button id="faster">+</button>
     <span id="rate" style="color:var(--ink-2);font-size:12px"></span>
   </div>
-  <div class="reads">
+  <div class="reads foldable">
     <span>Deepest now</span><b id="peak">&mdash;</b>
     <span>Umbra at</span><b id="where">&mdash;</b>
     <span>Sun altitude</span><b id="alt">&mdash;</b>
   </div>
-  <div class="row">
+  <div class="row foldable">
     <label class="check"><input type="checkbox" id="showPath" checked> Path</label>
     <label class="check"><input type="checkbox" id="showCoast" checked> Coast</label>
     <label class="check"><input type="checkbox" id="follow"> Follow</label>
   </div>
-  <div class="row">
+  <div class="row foldable">
     <button id="wide">Show the Moon</button>
     <label class="check"><input type="checkbox" id="showCone"> Cone</label>
   </div>
-  <div class="foot" id="foot"></div>
+  <div class="foot foldable" id="foot"></div>
 </div>
 
 <script id="scene" type="application/json">/*SCENE*/null/*SCENE*/</script>
@@ -516,25 +531,54 @@ function buildGraticule() {
 
 const camera = {longitude: 20, latitude: 15, distance: 3.2, target: [0, 0, 0]};
 const MAX_DISTANCE = 220;
-let dragging = null;
+
+// Every pointer currently down, so that one finger turns the globe and two
+// pinch it.  A phone has no wheel, and without this there is no way to zoom
+// at all -- the globe would be stuck at whatever distance it loaded with.
+const pointers = new Map();
+let pinch = null;
+
+function zoomTo(distance) {
+  camera.distance = Math.max(1.25, Math.min(MAX_DISTANCE, distance));
+}
+
+function fingerGap() {
+  const [a, b] = Array.from(pointers.values());
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
 
 canvas.addEventListener('pointerdown', e => {
-  dragging = {x: e.clientX, y: e.clientY};
+  pointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
   canvas.setPointerCapture(e.pointerId);
+  pinch = pointers.size === 2 ? fingerGap() : null;
 });
-canvas.addEventListener('pointerup', () => { dragging = null; });
+
+function liftPointer(e) {
+  pointers.delete(e.pointerId);
+  pinch = pointers.size === 2 ? fingerGap() : null;
+}
+canvas.addEventListener('pointerup', liftPointer);
+canvas.addEventListener('pointercancel', liftPointer);
+
 canvas.addEventListener('pointermove', e => {
-  if (!dragging) return;
-  camera.longitude -= (e.clientX - dragging.x) * 0.35;
+  const was = pointers.get(e.pointerId);
+  if (!was) return;
+  const now = {x: e.clientX, y: e.clientY};
+  pointers.set(e.pointerId, now);
+  if (pointers.size >= 2) {
+    const gap = fingerGap();
+    if (pinch && gap > 0) zoomTo(camera.distance * pinch / gap);
+    pinch = gap;
+    return;
+  }
+  camera.longitude -= (now.x - was.x) * 0.35;
   camera.latitude = Math.max(-89, Math.min(89,
-                    camera.latitude + (e.clientY - dragging.y) * 0.35));
-  dragging = {x: e.clientX, y: e.clientY};
+                    camera.latitude + (now.y - was.y) * 0.35));
   document.getElementById('follow').checked = false;
 });
 canvas.addEventListener('wheel', e => {
   e.preventDefault();
-  camera.distance = Math.max(1.25, Math.min(MAX_DISTANCE,
-                    camera.distance * Math.exp(e.deltaY * 0.0012)));
+  zoomTo(camera.distance * Math.exp(e.deltaY * 0.0012));
 }, {passive: false});
 
 function lookAt(eye, target, up) {
@@ -625,6 +669,15 @@ el('foot').innerHTML = 'Shadow computed per pixel from JPL DE440s positions, ' +
   'The Moon is at its true distance and size, so the cone has the angle it ' +
   'really has; its track is drawn in the same Earth-fixed frame as the globe, ' +
   'which means most of that curve is the Earth turning.';
+
+el('toggle').addEventListener('click', () => {
+  const shut = el('panel').classList.toggle('shut');
+  el('toggle').textContent = shut ? 'Controls' : 'Hide';
+  el('toggle').setAttribute('aria-expanded', String(!shut));
+});
+// Start out of the way on a small screen, where the open panel would cover the
+// thing it is describing.
+if (window.innerWidth < 720) el('toggle').click();
 
 el('scrub').addEventListener('input', () => {
   tt = T0 + (T1 - T0) * el('scrub').value / 1000.0;

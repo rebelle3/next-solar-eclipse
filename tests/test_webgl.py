@@ -301,6 +301,66 @@ def test_a_screenshot_shows_a_globe_and_a_shadow():
     assert offset < 0.10 * height, (offset, (row, column), (height, width))
 
 
+def test_the_panel_gets_out_of_the_way_on_a_phone():
+    """On a small screen the controls start folded, and can be folded again.
+
+    Open, the panel covers half a phone screen -- of the globe it is describing.
+    A control you cannot put away is worse than one you have to fetch back.
+    """
+    if not available():
+        return skip('no playwright or chromium')
+    from playwright.sync_api import sync_playwright
+    _eclipse, _built, page_path = prepared()
+    screen = {'width': 390, 'height': 844}
+    area = screen['width'] * screen['height']
+    problems = []
+    with sync_playwright() as play:
+        browser = play.chromium.launch(executable_path=CHROMIUM)
+        page = browser.new_page(viewport=screen, is_mobile=True, has_touch=True)
+        page.on('pageerror', lambda e: problems.append(str(e)))
+        page.goto('file://' + page_path)
+        page.wait_for_timeout(600)
+
+        shut = page.locator('#panel').bounding_box()
+        assert page.locator('#panel').evaluate(
+            "e => e.classList.contains('shut')"), 'panel did not start folded'
+        assert shut['width'] * shut['height'] < 0.08 * area, shut
+        assert page.locator('#toggle').inner_text() == 'Controls'
+        # Folded is not hidden: the clock still reads.
+        assert ':' in page.locator('#clock').inner_text()
+
+        page.click('#toggle')
+        page.wait_for_timeout(200)
+        opened = page.locator('#panel').bounding_box()
+        assert opened['height'] > 3 * shut['height'], (shut, opened)
+        assert page.locator('#toggle').inner_text() == 'Hide'
+        assert page.locator('#showPath').is_visible()
+
+        page.click('#toggle')
+        page.wait_for_timeout(200)
+        assert page.locator('#panel').evaluate(
+            "e => e.classList.contains('shut')"), 'panel would not fold again'
+
+        # Two fingers spreading apart must bring the globe closer.  A phone has
+        # no wheel, so without this there is no way to zoom at all.
+        before = page.evaluate('camera.distance')
+        page.evaluate('''() => {
+            const c = document.getElementById('gl');
+            c.setPointerCapture = () => {};
+            const send = (type, id, x) => c.dispatchEvent(new PointerEvent(type,
+                {pointerId: id, clientX: x, clientY: 400, bubbles: true,
+                 pointerType: 'touch'}));
+            send('pointerdown', 1, 150); send('pointerdown', 2, 250);
+            send('pointermove', 1, 100); send('pointermove', 2, 300);
+            send('pointerup', 1, 100); send('pointerup', 2, 300);
+        }''')
+        after = page.evaluate('camera.distance')
+        browser.close()
+    assert not problems, problems
+    # The gap doubled, so the camera should have come half the distance in.
+    assert abs(after - before / 2.0) < 0.05 * before, (before, after)
+
+
 def test_every_published_globe_loads_clean():
     """The pages in docs/ are what a visitor gets; check those, not a copy.
 
