@@ -1,123 +1,13 @@
 [
- {
-  "file": "nasa_path_2026.json",
-  "date": [
-   2026,
-   8,
-   12
-  ],
-  "kind": "T",
-  "delta_t": 71.4,
-  "label": "2026 Aug 12 T"
- },
- {
-  "file": "nasa_path_2026feb.json",
-  "date": [
-   2026,
-   2,
-   17
-  ],
-  "kind": "A",
-  "delta_t": 74.7,
-  "label": "2026 Feb 17 A"
- },
- {
-  "file": "nasa_path_2033.json",
-  "date": [
-   2033,
-   3,
-   30
-  ],
-  "kind": "T",
-  "delta_t": 78.9,
-  "label": "2033 Mar 30 T"
- },
- {
-  "file": "nasa_path_2027aug02t.json",
-  "date": [
-   2027,
-   8,
-   2
-  ],
-  "kind": "T",
-  "delta_t": 71.7,
-  "label": "2027 Aug 02 T"
- },
- {
-  "file": "nasa_path_2028jul22t.json",
-  "date": [
-   2028,
-   7,
-   22
-  ],
-  "kind": "T",
-  "delta_t": 72.1,
-  "label": "2028 Jul 22 T"
- },
- {
-  "file": "nasa_path_2030nov25t.json",
-  "date": [
-   2030,
-   11,
-   25
-  ],
-  "kind": "T",
-  "delta_t": 77.3,
-  "label": "2030 Nov 25 T"
- },
- {
-  "file": "nasa_path_2031nov14h.json",
-  "date": [
-   2031,
-   11,
-   14
-  ],
-  "kind": "H",
-  "delta_t": 77.9,
-  "label": "2031 Nov 14 H"
- },
- {
-  "file": "nasa_path_2034mar20t.json",
-  "date": [
-   2034,
-   3,
-   20
-  ],
-  "kind": "T",
-  "delta_t": 79.5,
-  "label": "2034 Mar 20 T"
- },
- {
-  "file": "nasa_path_2035sep02t.json",
-  "date": [
-   2035,
-   9,
-   2
-  ],
-  "kind": "T",
-  "delta_t": 80.6,
-  "label": "2035 Sep 02 T"
- },
- {
-  "file": "nasa_path_2041apr30t.json",
-  "date": [
-   2041,
-   4,
-   30
-  ],
-  "kind": "T",
-  "delta_t": 84.8,
-  "label": "2041 Apr 30 T"
- },
- {
-  "file": "nasa_path_2045aug12t.json",
-  "date": [
-   2045,
-   8,
-   12
-  ],
-  "kind": "T",
-  "delta_t": 88.3,
-  "label": "2045 Aug 12 T"
- }
+{"file":"nasa_path_2026.json","date":[2026,8,12],"kind":"T","delta_t":71.4,"label":"2026 Aug 12 T"},
+{"file":"nasa_path_2026feb.json","date":[2026,2,17],"kind":"A","delta_t":74.7,"label":"2026 Feb 17 A"},
+{"file":"nasa_path_2033.json","date":[2033,3,30],"kind":"T","delta_t":78.9,"label":"2033 Mar 30 T"},
+{"file":"nasa_path_2027aug02t.json","date":[2027,8,2],"kind":"T","delta_t":71.7,"label":"2027 Aug 02 T"},
+{"file":"nasa_path_2028jul22t.json","date":[2028,7,22],"kind":"T","delta_t":72.1,"label":"2028 Jul 22 T"},
+{"file":"nasa_path_2030nov25t.json","date":[2030,11,25],"kind":"T","delta_t":77.3,"label":"2030 Nov 25 T"},
+{"file":"nasa_path_2031nov14h.json","date":[2031,11,14],"kind":"H","delta_t":77.9,"label":"2031 Nov 14 H"},
+{"file":"nasa_path_2034mar20t.json","date":[2034,3,20],"kind":"T","delta_t":79.5,"label":"2034 Mar 20 T"},
+{"file":"nasa_path_2035sep02t.json","date":[2035,9,2],"kind":"T","delta_t":80.6,"label":"2035 Sep 02 T"},
+{"file":"nasa_path_2041apr30t.json","date":[2041,4,30],"kind":"T","delta_t":84.8,"label":"2041 Apr 30 T"},
+{"file":"nasa_path_2045aug12t.json","date":[2045,8,12],"kind":"T","delta_t":88.3,"label":"2045 Aug 12 T"}
 ]

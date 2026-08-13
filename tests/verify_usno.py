@@ -69,6 +69,37 @@ def fetch(date, latitude, longitude):
         return json.loads(handle.read().decode())
 
 
+def trim(record):
+    """Just the fields compared, so the cache is a fixture and not a dump.
+
+    The full response repeats the coordinates, the API version and a prose
+    description, and carries position and vertex angles this never reads.  Kept
+    whole it is fifty times the size for nothing.
+    """
+    properties = record['properties']
+    kept = {'delta_t': float(properties['delta_t'].rstrip('s')),
+            'obscuration': float(properties['obscuration'].rstrip('%')),
+            'magnitude': float(properties['magnitude']),
+            'phenomena': [[entry['phenomenon'], int(entry['day']),
+                           entry['time'], entry.get('altitude')]
+                          for entry in properties['local_data']]}
+    for name in ('duration_of_totality', 'duration_of_annularity'):
+        if name in properties:
+            kept['central'] = [name.split('_')[-1], properties[name]]
+    return kept
+
+
+def save(cache):
+    """One line per site: still JSON, but readable as a table."""
+    with open(CACHE, 'w') as handle:
+        handle.write('{\n')
+        handle.write(',\n'.join(
+            '%s: %s' % (json.dumps(key), json.dumps(cache[key],
+                                                    separators=(',', ':')))
+            for key in sorted(cache)))
+        handle.write('\n}\n')
+
+
 def parse_clock(text):
     """"17:16:55.1" -> seconds since midnight.
 
@@ -90,19 +121,16 @@ def parse_span(text):
 
 def altitude_at(name, record):
     """The Sun's altitude USNO reports at a phenomenon, in degrees."""
-    for entry in record['properties']['local_data']:
-        if entry['phenomenon'].startswith(name) and 'altitude' in entry:
-            return float(entry['altitude'])
+    for phenomenon, _, _, altitude in record['phenomena']:
+        if phenomenon.startswith(name) and altitude not in (None, '----'):
+            return float(altitude)
     return None
 
 
 def phenomena(record):
     """Phenomenon name -> (day, seconds since midnight UT)."""
-    found = {}
-    for entry in record['properties']['local_data']:
-        found[entry['phenomenon']] = (int(entry['day']),
-                                      parse_clock(entry['time']))
-    return found
+    return {name: (day, parse_clock(time))
+            for name, day, time, _ in record['phenomena']}
 
 
 def pick(name, found):
@@ -184,13 +212,12 @@ def do_fetch(cache):
                 cache[key] = {'refused': record['error']}
                 refused += 1
             else:
-                cache[key] = record
+                cache[key] = trim(record)
                 added += 1
             time.sleep(PAUSE_SECONDS)
         print('%s: %d sites (%d fetched, %d refused)'
               % (date, len(sites), added, refused), flush=True)
-        with open(CACHE, 'w') as handle:
-            json.dump(cache, handle, indent=0, sort_keys=True)
+        save(cache)
     print('cache holds %d responses' % len(cache))
 
 
@@ -207,7 +234,7 @@ def compare(cache, radius):
     rows, missing = [], 0
     for date in sorted(by_date):
         sites = by_date[date]
-        delta_t = float(sites[0][2]['properties']['delta_t'].rstrip('s'))
+        delta_t = sites[0][2]['delta_t']
         # Their delta-T, not ours: it decides how far the Earth had turned, and
         # comparing geometry means holding the timescale in common.
         ephem = Ephemeris(os.environ.get('ECLIPSEPATH_KERNEL'),
@@ -223,7 +250,6 @@ def compare(cache, radius):
             if mine is None:
                 missing += 1
                 continue
-            theirs = record['properties']
             found = phenomena(record)
             # Where the Sun rises or sets mid-eclipse the two are not
             # answering the same question at the ends: USNO stops at the
@@ -233,16 +259,14 @@ def compare(cache, radius):
                           for name in found)
             row = {'date': date, 'latitude': latitude, 'longitude': longitude,
                    'delta_t': delta_t, 'horizon': horizon}
-            row['obscuration_pct'] = (
-                mine['obscuration'] * 100.0
-                - float(theirs['obscuration'].rstrip('%')))
+            row['obscuration_pct'] = (mine['obscuration'] * 100.0
+                                      - record['obscuration'])
             central = mine['central_seconds'] > 0.0
             if not central:
                 # Where the Moon covers the Sun entirely, "magnitude" is the
                 # ratio of diameters by convention and the fraction of the
                 # diameter covered by formula, which are different numbers.
-                row['magnitude'] = mine['magnitude'] - float(
-                    theirs['magnitude'])
+                row['magnitude'] = mine['magnitude'] - record['magnitude']
 
             reference_day = min(d for d, _ in found.values())
 
@@ -268,10 +292,9 @@ def compare(cache, radius):
                 altitude = altitude_at('Maximum Eclipse', record)
                 if altitude is not None:
                     row['altitude'] = mine['sun_altitude'] - altitude
-            for name in ('duration_of_totality', 'duration_of_annularity'):
-                if name in theirs and central:
-                    row['central_seconds'] = (mine['central_seconds']
-                                              - parse_span(theirs[name]))
+            if central and 'central' in record:
+                row['central_seconds'] = (mine['central_seconds']
+                                          - parse_span(record['central'][1]))
             rows.append(row)
     return rows, missing
 
@@ -358,10 +381,7 @@ def three_way(cache, rows):
         if nasa is None or nasa['central_seconds'] <= 0.0:
             continue
         key = key_for(row['date'], row['latitude'], row['longitude'])
-        theirs = cache[key]['properties']
-        usno = next(parse_span(theirs[name]) for name in
-                    ('duration_of_totality', 'duration_of_annularity')
-                    if name in theirs)
+        usno = parse_span(cache[key]['central'][1])
         mine = usno + row['central_seconds']
         against_nasa.append(mine - nasa['central_seconds'])
         usno_against_nasa.append(usno - nasa['central_seconds'])

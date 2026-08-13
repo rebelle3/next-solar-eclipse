@@ -101,7 +101,13 @@ def main():
             print('%s FAILED: %s' % (stamp, error))
         time.sleep(0.4)
     with open(OUT, 'w') as handle:
-        json.dump(saved, handle, indent=1, sort_keys=True)
+        # One line per eclipse: still JSON, but readable as a table.
+        handle.write('{\n')
+        handle.write(',\n'.join(
+            '%s: %s' % (json.dumps(key), json.dumps(saved[key],
+                                                    separators=(',', ':')))
+            for key in sorted(saved)))
+        handle.write('\n}\n')
     print('%d eclipses in %s' % (len(saved), OUT))
     return 0
 
