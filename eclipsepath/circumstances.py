@@ -121,9 +121,6 @@ def obscuration_depth(threshold):
     return depth
 
 
-MAX_HORIZON_CROSSINGS = 4
-
-
 def peak_eclipse(window, itrf_xyz, tt_grid, depth=None, require_visible=True):
     """Deepest eclipse seen at each of ``P`` sites over the whole event.
 
@@ -133,10 +130,12 @@ def peak_eclipse(window, itrf_xyz, tt_grid, depth=None, require_visible=True):
     sunset peaks exactly as the Sun reaches the horizon, so those instants are
     candidates too and the best of them all wins.
 
-    Every horizon crossing is evaluated, not just the one nearest the deepest
-    moment.  Picking one by index makes this function jump wherever the choice
-    flips from a site to its neighbour, and a search for the edge of a region
-    then inherits that jump as a wobble of a few kilometres.
+    Which horizon crossing is taken is chosen by index, so this function can
+    step slightly where that choice flips from one site to its neighbour.  A
+    search for the edge of a region inherits that as a wobble of a few km,
+    which is visible at the ends of a region where the edge is nearly flat.
+    Evaluating every crossing removes it but costs far more than it is worth;
+    see the note in eclipse._trace_region.
     """
     if depth is None:
         depth = obscuration_depth(0.0)
@@ -166,21 +165,18 @@ def peak_eclipse(window, itrf_xyz, tt_grid, depth=None, require_visible=True):
     t_a = _golden_min(lambda tt: _separation_at(window, col, tt), lo, hi)
     best = _better(best, _evaluate(window, itrf_xyz, t_a, depth, require_visible))
 
-    # Candidate B: every crossing of the horizon.
+    # Candidate B: the horizon crossing nearest that instant, if there is one.
     crossing = visible[:, :-1] != visible[:, 1:]
     if crossing.any():
-        rank = np.cumsum(crossing, axis=1) - 1
-        for nth in range(MAX_HORIZON_CROSSINGS):
-            this = crossing & (rank == nth)
-            has = this.any(axis=1)
-            if not has.any():
-                break
-            k = np.argmax(this, axis=1)
-            t_b = _bisect(lambda tt: _altitude_at(window, col, tt),
-                          tt_grid[k], tt_grid[k + 1], 40)
-            t_b = np.where(has, t_b, best['t'])
-            best = _better(best, _evaluate(window, itrf_xyz, t_b, depth,
-                                           require_visible, tolerance=1e-9))
+        idx = np.arange(n_times - 1)[None, :]
+        cost = np.where(crossing, np.abs(idx - j[:, None]), n_times * 10)
+        k = np.argmin(cost, axis=1)
+        has = crossing[np.arange(n_sites), k]
+        t_b = _bisect(lambda tt: _altitude_at(window, col, tt),
+                      tt_grid[k], tt_grid[k + 1], 30)
+        t_b = np.where(has, t_b, best['t'])
+        best = _better(best, _evaluate(window, itrf_xyz, t_b, depth,
+                                       require_visible, tolerance=1e-9))
     return best
 
 

@@ -29,8 +29,11 @@ from .finder import RawEvent, axis_metrics
 WINDOW_PAD_DAYS = 6.0 / 1440.0
 REGION_RAYS = 180
 REGION_LIMIT_KM = 16000.0
-REGION_MAX_GAP_KM = 60.0
-REGION_MAX_VERTICES = 4000
+REGION_GAP_FRACTION = 0.02      # of the outline's mean reach
+REGION_MIN_GAP_KM = 25.0
+REGION_MAX_GAP_KM = 150.0
+REGION_VERTEX_BUDGET = 2.0     # cap on growth, as a multiple of rays
+REGION_REFINE_ROUNDS = 3
 SEARCH_LIMIT_KM = 12000.0
 NEW_MOON_EPOCH_TT = 2451550.09766   # 2000 Jan 6 new moon, TT Julian day
 SYNODIC_MONTH = 29.530588861
@@ -93,6 +96,7 @@ class Region:
     centre_latitude: float = float('nan')
     centre_longitude: float = float('nan')
     encloses_pole: bool = False
+    max_gap_km: float = float('nan')
 
     def __bool__(self):
         return bool(self.points)
@@ -518,8 +522,8 @@ def _is_strip(band):
 
 
 def _trace_region(window, coarse, tt_centre, threshold, label,
-                  rays=REGION_RAYS, iterations=36, max_gap_km=REGION_MAX_GAP_KM,
-                  max_vertices=REGION_MAX_VERTICES):
+                  rays=REGION_RAYS, iterations=36, max_gap_km=None,
+                  max_vertices=None):
     """Outline of the area reaching ``threshold``, swept out from its centre.
 
     Rays are cast from the deepest point of the eclipse and each is bisected
@@ -554,8 +558,15 @@ def _trace_region(window, coarse, tt_centre, threshold, label,
 
     azimuth = np.linspace(0.0, 360.0, rays, endpoint=False)
     distance = edge_at(azimuth)
+    if max_vertices is None:
+        max_vertices = int(rays * REGION_VERTEX_BUDGET)
+    if max_gap_km is None:
+        max_gap_km = float(np.clip(REGION_GAP_FRACTION * distance.mean(),
+                                   REGION_MIN_GAP_KM, REGION_MAX_GAP_KM))
 
-    while len(azimuth) < max_vertices:
+    for _ in range(REGION_REFINE_ROUNDS):
+        if len(azimuth) >= max_vertices:
+            break
         lat, lon = g.great_circle_destination(centre_lat, centre_lon,
                                               azimuth, distance)
         gap = g.geodesic_distance(lat, lon, np.roll(lat, -1), np.roll(lon, -1))
@@ -576,7 +587,7 @@ def _trace_region(window, coarse, tt_centre, threshold, label,
     edge = cc.peak_eclipse(window, g.geodetic_to_itrf(edge_lat, edge_lon), coarse)
 
     region = Region(label=label, centre_latitude=centre_lat,
-                    centre_longitude=centre_lon)
+                    centre_longitude=centre_lon, max_gap_km=max_gap_km)
     region.points = [
         RegionPoint(azimuth=float(azimuth[i]), distance_km=float(distance[i]),
                     latitude=float(edge_lat[i]), longitude=float(edge_lon[i]),
