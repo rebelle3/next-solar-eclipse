@@ -33,16 +33,17 @@ from eclipsepath.ephemeris import Ephemeris, EclipseWindow  # noqa: E402
 DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
 ROTATION_DEG_PER_SEC = 360.98564736629 / 86400.0
 
-CASES = [
-    {'file': 'nasa_path_2026.json', 'date': (2026, 8, 12), 'kind': 'T',
-     'delta_t': 71.4, 'label': '2026 Aug 12 total'},
-    {'file': 'nasa_path_2026feb.json', 'date': (2026, 2, 17), 'kind': 'A',
-     'delta_t': 74.7, 'label': '2026 Feb 17 annular'},
-    # A near-grazing total: the Sun is only about 11 degrees up along a path
-    # over 750 km wide, which is where a tangent-plane width is least reliable.
-    {'file': 'nasa_path_2033.json', 'date': (2033, 3, 30), 'kind': 'T',
-     'delta_t': 78.9, 'label': '2033 Mar 30 total (grazing)'},
-]
+def load_cases():
+    """Path tables to check, from tests/data/nasa_path_manifest.json.
+
+    Adding another is a matter of scraping the table and listing it there;
+    each carries the delta-T its page assumed, since that is what decides how
+    far the Earth had turned when NASA computed the row.
+    """
+    with open(os.path.join(DATA, 'nasa_path_manifest.json')) as handle:
+        return [{'file': c['file'], 'date': tuple(c['date']), 'kind': c['kind'],
+                 'delta_t': c['delta_t'], 'label': c['label']}
+                for c in json.load(handle)]
 
 
 def julian_day(year, month, day, hour, minute):
@@ -107,8 +108,8 @@ def run_case(ephem, case, verbose=True):
                              for x in tt])
     lon_fix = (case['delta_t'] - delta_t_here) * ROTATION_DEG_PER_SEC
 
-    event = finder.find_events(ephem, ts.utc(year, month, day - 1).tt,
-                               ts.utc(year, month, day + 1).tt)[0]
+    event = finder.find_events(ephem, ts.utc(year, month, day - 2).tt,
+                               ts.utc(year, month, day + 2).tt)[0]
     window = EclipseWindow(ephem, event.tt_first_contact - 0.01,
                            event.tt_last_contact + 0.01)
     coarse = np.linspace(event.tt_first_contact, event.tt_last_contact,
@@ -142,16 +143,25 @@ def run_case(ephem, case, verbose=True):
         polar = abs(row['c_lat']) > 84.0        # NASA's 2-min polyline is too
         edge = i < 2 or i > len(rows) - 3       # coarse near a pole or the ends
         d_c = polyline_distance_km(lat[i], lon[i] + lon_fix[i], ref_c)
-        d_n = polyline_distance_km(sample.north_latitude,
-                                   sample.north_longitude + lon_fix[i], ref_n)
-        d_s = polyline_distance_km(sample.south_latitude,
-                                   sample.south_longitude + lon_fix[i], ref_s)
+        # Each limit is compared against whichever published curve is nearer,
+        # not against the one sharing its name.  A hybrid eclipse pinches to
+        # zero width where it turns from annular to total, and the two limits
+        # trade sides across that point, so matching them up by name tests a
+        # labelling convention rather than the geometry.
+        near_n = min(polyline_distance_km(sample.north_latitude,
+                                          sample.north_longitude + lon_fix[i], curve)
+                     for curve in (ref_n, ref_s))
+        near_s = min(polyline_distance_km(sample.south_latitude,
+                                          sample.south_longitude + lon_fix[i], curve)
+                     for curve in (ref_n, ref_s))
+        d_n, d_s = near_n, near_s
         # Width is checked against the distance between NASA's own limit curves
         # rather than their tabulated figure: the tabulated width comes from a
         # tangent-plane Besselian formula that under-reports a very wide band
         # seen at low Sun altitude, by more than 20 km for the 2026 annular.
-        crossing = polyline_distance_km(sample.north_latitude,
-                                        sample.north_longitude + lon_fix[i], ref_s)
+        crossing = max(polyline_distance_km(sample.north_latitude,
+                                            sample.north_longitude + lon_fix[i], curve)
+                       for curve in (ref_n, ref_s))
         d_w = sample.width_km - crossing
         d_d = sample.duration_seconds - row['dur']
         if not (polar or edge):
@@ -178,7 +188,7 @@ def main():
     ephem = Ephemeris(kernel)
     g.R_MOON_KM = 0.2722810 * g.EARTH_A_KM
     failures = []
-    for case in CASES:
+    for case in load_cases():
         stats = run_case(ephem, case)
         print('\n  summary (polar and end rows excluded):')
         for key, limit, unit in (('central', 2.0, 'km'), ('north', 3.0, 'km'),
