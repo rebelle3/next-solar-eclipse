@@ -99,6 +99,23 @@
   #play { min-width: 74px; }
   input[type=checkbox] { accent-color: var(--accent); }
 
+  /* Labels are HTML over the canvas rather than glyphs baked into a texture:
+     the text stays selectable, sharp at any zoom, and legible to a screen
+     reader, and the only thing the GPU has to know about is where they go. */
+  #labels { position: absolute; inset: 0; pointer-events: none;
+            overflow: hidden; }
+  #labels span { position: absolute; white-space: nowrap; font-size: 11.5px;
+                 line-height: 1; color: var(--ink); text-shadow: 0 1px 3px #000,
+                 0 0 8px #000; transform: translate(-50%, -50%);
+                 font-variant-numeric: tabular-nums; }
+  #labels span i { font-style: normal; color: var(--ink-2); }
+  #labels span.central i { color: var(--gold); }
+  #pick { width: calc(100% - 54px); margin: 0 0 10px; padding: 5px 8px; font: inherit;
+          font-size: 13px; color: var(--ink); border-radius: 7px;
+          background: color-mix(in srgb, var(--surface) 88%, transparent);
+          border: 1px solid color-mix(in srgb, var(--line) 80%, transparent); }
+  #pick:hover { border-color: var(--accent); }
+
   #error { position: fixed; inset: 0; display: none; place-content: center;
            padding: 40px; text-align: center; color: var(--ink-2); }
 
@@ -116,11 +133,12 @@
 </style>
 </head>
 <body>
-<div id="stage"><canvas id="gl"></canvas></div>
+<div id="stage"><canvas id="gl"></canvas><div id="labels"></div></div>
 <div id="error"></div>
 <div id="info" class="glass">
   <button id="infoToggle" type="button" aria-controls="infoBody" aria-expanded="true">Hide</button>
   <div id="infoBody">
+    <select id="pick" aria-label="Which eclipse"></select>
     <h1 id="title">Eclipse</h1>
     <p class="sub" id="standfirst"></p>
     <div class="reads">
@@ -133,6 +151,7 @@
       <label class="check"><input type="checkbox" id="showCoast" checked> Coast</label>
       <label class="check"><input type="checkbox" id="follow"> Follow</label>
       <label class="check"><input type="checkbox" id="showCone"> Cone</label>
+      <label class="check"><input type="checkbox" id="showPins" checked> Places</label>
     </div>
     <div class="row">
       <button id="wide">Show the Moon</button>
@@ -163,7 +182,12 @@
 <script>
 'use strict';
 
-const SCENE = JSON.parse(document.getElementById('scene').textContent);
+const BUNDLE = JSON.parse(document.getElementById('scene').textContent);
+// One eclipse or several: a bundle stores what they share -- the coastlines and
+// the constants -- once rather than once each, which is most of the file.
+const SCENES = BUNDLE.scenes || [BUNDLE];
+const COASTLINES = BUNDLE.coastlines || SCENES[0].coastlines || [];
+let SCENE = SCENES[0];
 
 // ---------------------------------------------------------------- geometry --
 // The same quantities the Python package computes, in the same units: ITRF
@@ -171,7 +195,7 @@ const SCENE = JSON.parse(document.getElementById('scene').textContent);
 // Sun's disc area.  Where the shader does this per pixel, these are for the
 // readouts and for the tests to compare against.
 
-const C = SCENE.constants;
+const C = BUNDLE.constants || SCENES[0].constants;
 const E2 = 1.0 - (C.earth_b_km * C.earth_b_km) / (C.earth_a_km * C.earth_a_km);
 
 function catmull(p0, p1, p2, p3, t) {
@@ -515,11 +539,13 @@ function makeLineSet(rings, lift) {
   return {vao: vao, counts: built.counts};
 }
 
-const coast = makeLineSet(SCENE.coastlines, 0.0012);
-const pathLines = makeLineSet(
-  [SCENE.path.centre, SCENE.path.north, SCENE.path.south].filter(r => r.length),
-  0.0025);
+function disposeLineSet(set) {
+  if (set) gl.deleteVertexArray(set.vao);
+}
+
+const coast = makeLineSet(COASTLINES, 0.0012);
 const graticule = makeLineSet(buildGraticule(), 0.0006);
+let pathLines = null;
 
 const moonMesh = buildSphere(48, 96);
 const moonVao = gl.createVertexArray();
@@ -533,7 +559,9 @@ gl.bindVertexArray(null);
 // The Moon's track across the eclipse, in the same Earth-fixed frame as
 // everything else.  Most of its curve is the Earth turning rather than the
 // Moon going round, which is why the panel calls it a track and not an orbit.
-const moonTrack = (() => {
+let moonTrack = null;
+
+function buildMoonTrack() {
   const points = [];
   for (let i = 0; i < SCENE.time.count; i++)
     points.push(SCENE.moon_itrf_km[3 * i], SCENE.moon_itrf_km[3 * i + 1],
@@ -545,7 +573,104 @@ const moonTrack = (() => {
   gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
   gl.bindVertexArray(null);
   return {vao: vao, counts: [SCENE.time.count]};
+}
+
+// --- named places ------------------------------------------------------------
+// A pin is a stalk standing off the surface with a dot on the end, coloured by
+// what the place sees: gold where the Sun goes out entirely, cooling towards
+// the edge of the partial.  The stalk is what makes it read as standing on a
+// globe rather than floating in front of one.
+const PIN_VS = `#version 300 es
+precision highp float;
+in vec3 aPos;
+in vec3 aColour;
+uniform mat4 uViewProj;
+uniform float uSize;
+out vec3 vColour;
+void main() {
+  vColour = aColour;
+  gl_Position = uViewProj * vec4(aPos, 1.0);
+  gl_PointSize = uSize;
+}`;
+
+const PIN_FS = `#version 300 es
+precision highp float;
+in vec3 vColour;
+out vec4 fragColor;
+uniform float uRound;
+void main() {
+  if (uRound > 0.5) {
+    vec2 d = gl_PointCoord - vec2(0.5);
+    if (dot(d, d) > 0.25) discard;
+  }
+  fragColor = vec4(vColour, 1.0);
+}`;
+
+const pinProgram = (() => {
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(gl.VERTEX_SHADER, PIN_VS));
+  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, PIN_FS));
+  gl.bindAttribLocation(p, 0, 'aPos');
+  gl.bindAttribLocation(p, 1, 'aColour');
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS))
+    throw new Error(gl.getProgramInfoLog(p));
+  return p;
 })();
+const pinUniforms = {};
+for (const name of ['uViewProj', 'uSize', 'uRound'])
+  pinUniforms[name] = gl.getUniformLocation(pinProgram, name);
+const PIN_LIFT = 0.016;
+let pins = null;
+
+function pinColour(place) {
+  if (place.central) return [0.94, 0.74, 0.22];
+  const t = Math.min(1, Math.max(0, (place.obs - 0.4) / 0.6));
+  return [0.42 + 0.42 * t, 0.58 + 0.26 * t, 0.86 - 0.12 * t];
+}
+
+function buildPins() {
+  const list = SCENE.places || [];
+  if (!list.length) return null;
+  const stalks = [], stalkColours = [], tips = [], tipColours = [];
+  for (const place of list) {
+    const ground = geodeticToItrf(place.lat, place.lon);
+    const colour = pinColour(place);
+    const top = ground.map(v => v * (1.0 + PIN_LIFT));
+    stalks.push(ground[0], ground[1], ground[2], top[0], top[1], top[2]);
+    stalkColours.push(colour[0], colour[1], colour[2],
+                      colour[0], colour[1], colour[2]);
+    tips.push(top[0], top[1], top[2]);
+    tipColours.push(colour[0], colour[1], colour[2]);
+    place.xyz = top;
+    place.normal = zenithAt(ground);
+  }
+  const make = (points, colours) => {
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    buffer(new Float32Array(points), gl.ARRAY_BUFFER);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    buffer(new Float32Array(colours), gl.ARRAY_BUFFER);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
+    gl.bindVertexArray(null);
+    return vao;
+  };
+  // Worth-naming order, settled once: the places the shadow crosses first,
+  // then by what is seen, then by how many people are there to see it.  The
+  // declutter below spends its budget down this list.
+  const order = list.slice().sort((a, b) =>
+    (b.central - a.central) || (b.obs - a.obs) || (b.pop - a.pop));
+  return {stalks: make(stalks, stalkColours), tips: make(tips, tipColours),
+          count: list.length, list: list, order: order};
+}
+
+function disposePins(set) {
+  if (!set) return;
+  gl.deleteVertexArray(set.stalks);
+  gl.deleteVertexArray(set.tips);
+}
 
 // The umbral cone, rebuilt each frame: generators from the Moon's limb to the
 // apex where the cone closes, plus the limb itself and the axis.  For a total
@@ -607,6 +732,7 @@ function buildGraticule() {
 
 const camera = {longitude: 20, latitude: 15, distance: 3.2, target: [0, 0, 0]};
 const MAX_DISTANCE = 220;
+let wideView = false;
 
 // Every pointer currently down, so that one finger turns the globe and two
 // pinch it.  A phone has no wheel, and without this there is no way to zoom
@@ -697,7 +823,7 @@ function viewProjection(aspect) {
 
 // ------------------------------------------------------------------- time ---
 
-const T0 = SCENE.time.first_contact_tt, T1 = SCENE.time.last_contact_tt;
+let T0 = SCENE.time.first_contact_tt, T1 = SCENE.time.last_contact_tt;
 let tt = SCENE.time.greatest_tt;
 let playing = false;
 let rate = 240;                              // seconds of eclipse per second
@@ -731,20 +857,66 @@ function axisPoint(state) {
 // -------------------------------------------------------------------- ui ----
 
 const el = id => document.getElementById(id);
-const E = SCENE.eclipse;
-el('title').textContent = E.type_name + ' eclipse of ' + E.date;
-el('standfirst').textContent = E.central
-  ? ('Greatest at ' + E.greatest_utc.slice(11, 19) + ' UTC, ' +
-     (E.obscuration * 100).toFixed(2) + '% covered, band ' +
-     (E.path_width_km ? E.path_width_km.toFixed(0) + ' km wide' : 'traced') + '.')
-  : ('Partial everywhere; at most ' + (E.obscuration * 100).toFixed(1) +
-     '% of the Sun is hidden.');
-el('foot').innerHTML = 'Shadow computed per pixel from JPL DE440s positions, ' +
-  'with the same circle overlap the eclipsepath package uses. ' +
-  'Saros ' + E.saros + ', gamma ' + E.gamma.toFixed(3) + '. ' +
-  'The Moon is at its true distance and size, so the cone has the angle it ' +
-  'really has; its track is drawn in the same Earth-fixed frame as the globe, ' +
-  'which means most of that curve is the Earth turning.';
+
+function mmss(seconds) {
+  const whole = Math.round(seconds);
+  const minutes = Math.floor(whole / 60);
+  return minutes ? minutes + 'm' + String(whole % 60).padStart(2, '0') + 's'
+                 : whole + 's';
+}
+
+// Everything that changes when a different eclipse is chosen, in one place.
+// The coastlines and the graticule are not here: they are the same Earth.
+function applyScene(index) {
+  SCENE = SCENES[index];
+  const E = SCENE.eclipse;
+  T0 = SCENE.time.first_contact_tt;
+  T1 = SCENE.time.last_contact_tt;
+  tt = SCENE.time.greatest_tt;
+  playing = false;
+  el('play').textContent = 'Play';
+
+  disposeLineSet(pathLines);
+  disposeLineSet(moonTrack);
+  disposePins(pins);
+  pathLines = makeLineSet(
+    [SCENE.path.centre, SCENE.path.north, SCENE.path.south]
+      .filter(r => r && r.length), 0.0025);
+  moonTrack = buildMoonTrack();
+  pins = buildPins();
+
+  el('title').textContent = E.type_name + ' eclipse of ' + E.date;
+  el('standfirst').textContent = E.central
+    ? ('Greatest at ' + E.greatest_utc.slice(11, 19) + ' UTC, ' +
+       (E.obscuration * 100).toFixed(2) + '% covered, band ' +
+       (E.path_width_km ? E.path_width_km.toFixed(0) + ' km wide' : 'traced') + '.')
+    : ('Partial everywhere; at most ' + (E.obscuration * 100).toFixed(1) +
+       '% of the Sun is hidden.');
+  el('foot').textContent = 'Shadow computed per pixel from JPL DE440s ' +
+    'positions, with the same circle overlap the eclipsepath package uses. ' +
+    'Saros ' + E.saros + ', gamma ' + E.gamma.toFixed(3) + '. ' +
+    'The Moon is at its true distance and size, so the cone has the angle it ' +
+    'really has; its track is drawn in the same Earth-fixed frame as the ' +
+    'globe, which means most of that curve is the Earth turning.';
+
+  // Look at where the shadow is deepest, so a newly chosen eclipse opens on
+  // the thing worth seeing rather than on whichever ocean was last in view.
+  if (!wideView) {
+    camera.longitude = E.longitude;
+    camera.latitude = E.latitude;
+  }
+  markTimeline();
+}
+
+const picker = el('pick');
+SCENES.forEach((one, index) => {
+  const option = document.createElement('option');
+  option.value = String(index);
+  option.textContent = one.eclipse.type_name + ' — ' + one.eclipse.date;
+  picker.appendChild(option);
+});
+picker.style.display = SCENES.length > 1 ? '' : 'none';
+picker.addEventListener('change', () => applyScene(Number(picker.value)));
 
 el('infoToggle').addEventListener('click', () => {
   const shut = el('info').classList.toggle('shut');
@@ -756,10 +928,10 @@ el('infoToggle').addEventListener('click', () => {
 // no other way to reach, and it takes a strip along the bottom either way.
 if (window.innerWidth < 720) el('infoToggle').click();
 
-// The timeline's fixed marks, set once.  The gold band is the stretch during
-// which the umbra is somewhere on the ground -- absent for a partial, which
-// never has one, and then the band is simply not drawn.
-(function markTimeline() {
+// The gold band is the stretch during which the umbra is somewhere on the
+// ground -- absent for a partial, which never has one, and then the band is
+// simply not drawn.
+function markTimeline() {
   const place = value => (100.0 * (value - T0) / (T1 - T0)) + '%';
   el('mark').style.left = 'calc(' + place(SCENE.time.greatest_tt) + ' - 1px)';
   const from = SCENE.time.central_start_tt, to = SCENE.time.central_end_tt;
@@ -767,9 +939,10 @@ if (window.innerWidth < 720) el('infoToggle').click();
     el('band').style.display = 'none';
     return;
   }
+  el('band').style.display = '';
   el('band').style.left = place(from);
   el('band').style.width = (100.0 * (to - from) / (T1 - T0)) + '%';
-})();
+}
 
 el('scrub').addEventListener('input', () => {
   tt = T0 + (T1 - T0) * el('scrub').value / 1000.0;
@@ -780,7 +953,6 @@ el('play').addEventListener('click', () => {
   if (playing && tt >= T1 - 1e-9) tt = T0;
   el('play').textContent = playing ? 'Pause' : 'Play';
 });
-let wideView = false;
 el('wide').addEventListener('click', () => {
   wideView = !wideView;
   el('wide').textContent = wideView ? 'Back to the Earth' : 'Show the Moon';
@@ -806,6 +978,7 @@ el('faster').addEventListener('click', () => { rate = Math.min(3840, rate * 2); 
 el('slower').addEventListener('click', () => { rate = Math.max(15, rate / 2); showRate(); });
 function showRate() { el('rate').textContent = rate + '×'; }
 showRate();
+applyScene(0);
 
 // ------------------------------------------------------------------ draw ----
 
@@ -820,6 +993,83 @@ const lineUniforms = {
   uViewProj: gl.getUniformLocation(lineProgram, 'uViewProj'),
   uColor: gl.getUniformLocation(lineProgram, 'uColor'),
 };
+
+// --- labels ------------------------------------------------------------------
+// Project a world point the same way the vertex shader does, so a label sits
+// exactly over the pin it names.
+function project(m, p) {
+  const x = m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12];
+  const y = m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13];
+  const w = m[3] * p[0] + m[7] * p[1] + m[11] * p[2] + m[15];
+  if (w <= 0) return null;
+  return {x: x / w, y: y / w};
+}
+
+const labelLayer = el('labels');
+const labelPool = [];
+
+function labelFor(index) {
+  while (labelPool.length <= index) {
+    const span = document.createElement('span');
+    span.appendChild(document.createTextNode(''));
+    span.appendChild(document.createElement('i'));
+    labelLayer.appendChild(span);
+    labelPool.push(span);
+  }
+  return labelPool[index];
+}
+
+const LABEL_GAP = 52;          // pixels between labels before one is dropped
+const LABEL_LIMIT = 30;
+
+// Where a label would be read through a control rather than over the globe.
+// A name half under the info card is worse than no name: it is a name you
+// cannot read occupying a slot another one could have used.
+function blockedRegions() {
+  const out = [];
+  for (const id of ['info', 'transport']) {
+    const box = el(id).getBoundingClientRect();
+    if (box.width) out.push(box);
+  }
+  return out;
+}
+
+function updateLabels(matrix, eye) {
+  let used = 0;
+  if (pins && el('showPins').checked) {
+    const width = canvas.clientWidth, height = canvas.clientHeight;
+    const taken = [];
+    const blocked = blockedRegions();
+    for (const place of pins.order) {
+      if (used >= LABEL_LIMIT) break;
+      // Behind the globe: the pin is there, but the Earth is in the way.
+      const toEye = sub(eye, place.xyz);
+      if (dot(place.normal, toEye) <= 0) continue;
+      const ndc = project(matrix, place.xyz);
+      if (!ndc || Math.abs(ndc.x) > 1 || Math.abs(ndc.y) > 1) continue;
+      const x = (ndc.x * 0.5 + 0.5) * width;
+      const y = (0.5 - ndc.y * 0.5) * height - 11;
+      // Crowding is a function of the zoom, not of the data: two towns forty
+      // kilometres apart need one label between them from far off and two from
+      // close in, so the test is in pixels and redone every frame.
+      if (blocked.some(box => x > box.left - 40 && x < box.right + 40
+                              && y > box.top - 10 && y < box.bottom + 10))
+        continue;
+      if (taken.some(p => Math.abs(p[0] - x) < LABEL_GAP * 1.6
+                          && Math.abs(p[1] - y) < 15)) continue;
+      taken.push([x, y]);
+      const span = labelFor(used++);
+      span.firstChild.nodeValue = place.name + ' ';
+      span.lastChild.textContent = place.central ? mmss(place.dur)
+                                   : Math.round(place.obs * 100) + '%';
+      span.className = place.central ? 'central' : '';
+      span.style.transform = 'translate(-50%,-50%) translate(' + x.toFixed(1)
+                             + 'px,' + y.toFixed(1) + 'px)';
+      span.style.display = '';
+    }
+  }
+  for (let i = used; i < labelPool.length; i++) labelPool[i].style.display = 'none';
+}
 
 function drawLineSet(set, colour, matrix) {
   gl.useProgram(lineProgram);
@@ -879,6 +1129,19 @@ function render(mode) {
     }
     gl.disable(gl.BLEND);
 
+    if (pins && el('showPins').checked) {
+      gl.useProgram(pinProgram);
+      gl.uniformMatrix4fv(pinUniforms.uViewProj, false, camera3.matrix);
+      gl.uniform1f(pinUniforms.uRound, 0.0);
+      gl.uniform1f(pinUniforms.uSize, 1.0);
+      gl.bindVertexArray(pins.stalks);
+      gl.drawArrays(gl.LINES, 0, pins.count * 2);
+      gl.uniform1f(pinUniforms.uRound, 1.0);
+      gl.uniform1f(pinUniforms.uSize, 6.0);
+      gl.bindVertexArray(pins.tips);
+      gl.drawArrays(gl.POINTS, 0, pins.count);
+    }
+
     gl.useProgram(bodyProgram);
     gl.uniformMatrix4fv(bodyUniforms.uViewProj, false, camera3.matrix);
     gl.uniform3fv(bodyUniforms.uCentre, new Float32Array(state.moon));
@@ -888,6 +1151,7 @@ function render(mode) {
     gl.uniform3fv(bodyUniforms.uTint, new Float32Array([0.78, 0.76, 0.72]));
     gl.bindVertexArray(moonVao);
     gl.drawElements(gl.TRIANGLES, moonMesh.indices.length, gl.UNSIGNED_SHORT, 0);
+    updateLabels(camera3.matrix, camera3.eye);
   }
   return state;
 }

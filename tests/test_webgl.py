@@ -28,12 +28,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
 from eclipsepath import circumstances as cc  # noqa: E402
-from eclipsepath import eclipse as ec, finder, scene  # noqa: E402
+from eclipsepath import eclipse as ec, finder, places, scene  # noqa: E402
 from eclipsepath import geometry as g  # noqa: E402
 from eclipsepath.ephemeris import Ephemeris  # noqa: E402
 
 KERNEL = os.environ.get('ECLIPSEPATH_KERNEL')
 COAST = os.environ.get('ECLIPSEPATH_COASTLINES')
+PLACES = os.environ.get('ECLIPSEPATH_PLACES')
 CHROMIUM = os.environ.get(
     'ECLIPSEPATH_CHROMIUM',
     '/opt/pw-browsers/chromium-1194/chrome-linux/chrome')
@@ -75,6 +76,30 @@ def prepared():
             handle.write(scene.standalone(built))
         _cache['built'] = (eclipse, built, page)
     return _cache['built']
+
+
+def prepared_bundle():
+    """Two eclipses with named places, bundled into one page."""
+    if 'bundle' not in _cache:
+        g.set_lunar_radius('espenak')
+        ephem = Ephemeris(KERNEL)
+        ts = ephem.timescale
+        catalogue = places.load(PLACES)
+        scenes, eclipses = [], []
+        for year, month, day in ((2027, 8, 2), (2028, 7, 22)):
+            events = finder.find_events(ephem, ts.utc(year, month, day - 1).tt,
+                                        ts.utc(year, month, day + 1).tt)
+            eclipse = ec.analyse(ephem, events[0], threshold=1.0, samples=60)
+            named = places.describe(eclipse, catalogue,
+                                    places.select(eclipse, catalogue, limit=40))
+            scenes.append(scene.build(eclipse, ts, None, named_places=named))
+            eclipses.append(eclipse)
+        folder = tempfile.mkdtemp(prefix='eclipsepath-bundle-')
+        page = os.path.join(folder, 'globe.html')
+        with open(page, 'w') as handle:
+            handle.write(scene.standalone(scene.bundle(scenes)))
+        _cache['bundle'] = (eclipses, scenes, page)
+    return _cache['bundle']
 
 
 def in_browser(body, *args):
@@ -411,6 +436,130 @@ def test_the_timeline_marks_the_central_phase_where_it_happens():
         browser.close()
     assert kind == 'P', kind
     assert shown == 'none', shown
+
+
+def test_the_picker_swaps_the_whole_scene():
+    """Choosing a different eclipse must change everything that belongs to it.
+
+    A half-swapped scene is the failure worth catching: the title changes while
+    the path, the pins or the timeline still describe the eclipse before it,
+    and the page looks perfectly fine while being wrong.
+    """
+    if not available():
+        return skip('no playwright or chromium')
+    if not (PLACES and os.path.exists(PLACES)):
+        return skip('set ECLIPSEPATH_PLACES to a populated-places GeoJSON')
+    from playwright.sync_api import sync_playwright
+    eclipses, scenes, page_path = prepared_bundle()
+    problems = []
+    with sync_playwright() as play:
+        browser = play.chromium.launch(executable_path=CHROMIUM)
+        page = browser.new_page(viewport={'width': 1100, 'height': 780})
+        page.on('pageerror', lambda e: problems.append(str(e)))
+        page.on('console', lambda m: problems.append(m.text)
+                if m.type == 'error' else None)
+        page.goto('file://' + page_path)
+        page.wait_for_timeout(800)
+        look = '''() => ({
+            title: document.querySelector('h1').textContent,
+            pins: pins ? pins.count : 0,
+            // The names, not the count: two eclipses can happen to be given
+            // the same number of places, and a matching count would say
+            // nothing about whether the pins had been swapped.
+            named: pins ? pins.list.slice(0, 5).map(p => p.name).join(',') : '',
+            first: SCENE.time.first_contact_tt,
+            band: document.getElementById('band').style.width,
+            options: Array.from(document.getElementById('pick').options)
+                       .map(o => o.textContent),
+        })'''
+        seen = [page.evaluate(look)]
+        page.select_option('#pick', '1')
+        page.wait_for_timeout(700)
+        seen.append(page.evaluate(look))
+        page.select_option('#pick', '0')
+        page.wait_for_timeout(700)
+        seen.append(page.evaluate(look))
+        browser.close()
+    assert not problems, problems
+
+    assert len(seen[0]['options']) == 2, seen[0]['options']
+    for index in (0, 1):
+        assert scenes[index]['eclipse']['date'] in seen[0]['options'][index]
+    for field in ('title', 'named', 'first', 'band'):
+        assert seen[0][field] != seen[1][field], (field, seen[0], seen[1])
+    assert seen[2] == seen[0], 'switching back did not restore the first scene'
+    for index in (0, 1):
+        assert abs(seen[index]['first']
+                   - eclipses[index].tt_first_contact) < 1e-9, seen[index]
+
+
+def test_the_pins_say_what_each_place_actually_sees():
+    """Every named place, checked against circumstances_at for that place.
+
+    The pins are the part a reader will believe without checking, so they are
+    the part worth checking: a label reading 42% over a city that sees 30% is
+    indistinguishable from a correct one at a glance.
+    """
+    if not available():
+        return skip('no playwright or chromium')
+    if not (PLACES and os.path.exists(PLACES)):
+        return skip('set ECLIPSEPATH_PLACES to a populated-places GeoJSON')
+    from eclipsepath.observer import circumstances_at
+    eclipses, scenes, _page = prepared_bundle()
+    eclipse, built = eclipses[0], scenes[0]
+    named = built['places']
+    assert len(named) >= 20, len(named)
+    assert any(p['central'] for p in named), 'no place in the path of totality'
+    assert any(not p['central'] for p in named), 'nothing outside the path'
+
+    worst_obscuration = worst_duration = 0.0
+    for pin in named:
+        seen = circumstances_at(eclipse, pin['lat'], pin['lon'])
+        assert seen is not None, pin['name']
+        worst_obscuration = max(worst_obscuration,
+                                abs(seen['obscuration'] - pin['obs']))
+        if pin['central']:
+            worst_duration = max(worst_duration,
+                                 abs(seen['central_seconds'] - pin['dur']))
+        else:
+            # Nothing outside the path may claim a duration of totality.
+            assert pin['dur'] == 0.0, pin
+        assert pin['obs'] >= places.DEFAULT_FLOOR - 1e-9, pin
+        assert seen['sun_altitude'] > g.HORIZON_ALTITUDE_DEG, pin
+    assert worst_obscuration < 1e-5, worst_obscuration
+    assert worst_duration < 0.1, worst_duration
+
+    # And the timings a label would quote are inside the eclipse, in order.
+    for pin in named:
+        assert pin['c1'] < pin['max'] < pin['c4'], pin
+
+
+def test_labels_keep_clear_of_the_controls():
+    if not available():
+        return skip('no playwright or chromium')
+    if not (PLACES and os.path.exists(PLACES)):
+        return skip('set ECLIPSEPATH_PLACES to a populated-places GeoJSON')
+    from playwright.sync_api import sync_playwright
+    _eclipses, _scenes, page_path = prepared_bundle()
+    with sync_playwright() as play:
+        browser = play.chromium.launch(executable_path=CHROMIUM)
+        page = browser.new_page(viewport={'width': 1200, 'height': 800})
+        page.goto('file://' + page_path)
+        page.wait_for_timeout(900)
+        clash = page.evaluate('''() => {
+            const shown = Array.from(document.querySelectorAll('#labels span'))
+                .filter(s => s.style.display !== 'none');
+            const boxes = ['info', 'transport']
+                .map(id => document.getElementById(id).getBoundingClientRect());
+            return {count: shown.length, over: shown.filter(s => {
+                const r = s.getBoundingClientRect();
+                return boxes.some(b => r.right > b.left && r.left < b.right &&
+                                       r.bottom > b.top && r.top < b.bottom);
+            }).map(s => s.textContent.trim())};
+        }''')
+        browser.close()
+    assert clash['count'] > 5, clash
+    assert clash['over'] == [], clash['over']
 
 
 def test_every_published_globe_loads_clean():

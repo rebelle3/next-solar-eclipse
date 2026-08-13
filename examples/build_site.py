@@ -2,7 +2,9 @@
 """Build a static site of eclipse globes, ready for GitHub Pages.
 
     curl -sO https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_land.geojson
-    python3 examples/build_site.py ne_110m_land.geojson --out docs
+    curl -sO https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_populated_places_simple.geojson
+    python3 examples/build_site.py ne_110m_land.geojson --out docs \
+        --places ne_10m_populated_places_simple.geojson
 
 Each globe is a self-contained page, so the site is a directory of files with
 no build step, no bundler and nothing fetched at run time.  The index is
@@ -19,7 +21,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from eclipsepath import eclipse as ec, finder, output, scene  # noqa: E402
+from eclipsepath import eclipse as ec, finder, output, places, scene  # noqa: E402
 from eclipsepath import geometry as g  # noqa: E402
 from eclipsepath.ephemeris import Ephemeris  # noqa: E402
 
@@ -72,6 +74,10 @@ PAGE = '''<!doctype html>
   footer { margin-top:56px; padding-top:20px; border-top:1px solid var(--line);
            color:var(--ink-2); font-size:13px; }
   code { background:#0b0e14; padding:1px 5px; border-radius:4px; font-size:12.5px; }
+  a.big { display:inline-block; margin:8px 12px 8px 0; padding:9px 18px;
+          background:var(--accent); color:#0b0e14; font-weight:600;
+          border-radius:8px; text-decoration:none; }
+  a.big:hover { filter:brightness(1.08); }
 </style>
 </head>
 <body>
@@ -87,7 +93,9 @@ every pixel how much of the Sun is covered at the point of the Earth under it â€
 the same circle overlap the Python package uses. It agrees with it to
 2.7&times;10<sup>&minus;5</sup>, and puts the edge of totality within a metre.</p>
 
-<h2>Globes</h2>
+<p class="lede"><a class="big" href="globe.html">Open the viewer &rarr;</a>
+All six in one page, with a picker. Or take them one at a time:</p>
+
 <div class="grid">
 %(cards)s
 </div>
@@ -121,7 +129,8 @@ CARD = '''  <a class="card" href="globes/%(file)s">
   </a>'''
 
 
-def build(dates, coastlines, out, kernel=None, samples=160, quiet=False):
+def build(dates, coastlines, out, kernel=None, samples=160, quiet=False,
+          place_file=None, floor=0.40, limit=90):
     def note(message):
         if not quiet:
             print(message, file=sys.stderr)
@@ -135,7 +144,8 @@ def build(dates, coastlines, out, kernel=None, samples=160, quiet=False):
     note('loading ephemeris...')
     ephem = Ephemeris(kernel)
     ts = ephem.timescale
-    cards, built = [], []
+    catalogue = places.load(place_file) if place_file else None
+    cards, built, scenes = [], [], []
     for date, description in dates:
         note('  %s' % date)
         year, month, day = (int(part) for part in date.split('-'))
@@ -145,7 +155,15 @@ def build(dates, coastlines, out, kernel=None, samples=160, quiet=False):
             note('    no eclipse found, skipping')
             continue
         eclipse = ec.analyse(ephem, events[0], threshold=1.0, samples=samples)
-        data = scene.build(eclipse, ts, coastlines)
+        named = []
+        if catalogue:
+            named = places.describe(eclipse, catalogue,
+                                    places.select(eclipse, catalogue,
+                                                  floor=floor, limit=limit))
+            note('    %d places named, %d of them in the path'
+                 % (len(named), sum(1 for p in named if p['central'])))
+        data = scene.build(eclipse, ts, coastlines, named_places=named)
+        scenes.append(data)
         name = 'eclipse_%s.html' % date.replace('-', '')
         with open(os.path.join(out, 'globes', name), 'w') as handle:
             handle.write(scene.standalone(data))
@@ -161,6 +179,12 @@ def build(dates, coastlines, out, kernel=None, samples=160, quiet=False):
             'saros': summary['saros'],
         })
         built.append((date, name, summary))
+    # One page holding all of them, which is what the picker is for.  The
+    # coastlines and the constants are stored once for the lot rather than once
+    # each, so six eclipses cost far less than six pages do.
+    if scenes:
+        with open(os.path.join(out, 'globe.html'), 'w') as handle:
+            handle.write(scene.standalone(scene.bundle(scenes)))
     with open(os.path.join(out, 'index.html'), 'w') as handle:
         handle.write(PAGE % {'cards': '\n'.join(cards)})
     return built
@@ -174,13 +198,18 @@ def main():
                         help='animation to copy into media/')
     parser.add_argument('--dates', nargs='*', default=None)
     parser.add_argument('--samples', type=int, default=160)
+    parser.add_argument('--places', default=None,
+                        help='Natural Earth populated places GeoJSON')
+    parser.add_argument('--place-floor', type=float, default=40.0, metavar='PCT')
+    parser.add_argument('--place-limit', type=int, default=90, metavar='N')
     parser.add_argument('--kernel', default=None)
     parser.add_argument('--quiet', '-q', action='store_true')
     args = parser.parse_args()
 
     dates = ([(d, '') for d in args.dates] if args.dates else DEFAULT_DATES)
     built = build(dates, args.coastlines, args.out, args.kernel, args.samples,
-                  args.quiet)
+                  args.quiet, args.places, args.place_floor / 100.0,
+                  args.place_limit)
     if args.gif:
         shutil.copyfile(args.gif, os.path.join(args.out, 'media',
                                                os.path.basename(args.gif)))

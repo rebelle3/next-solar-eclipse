@@ -182,15 +182,31 @@ curl -sO https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/g
 python3 -m eclipsepath.scene 2027-08-02 ne_110m_land.geojson -o globe.html
 ```
 
+Pass `--places` a Natural Earth populated-places file and the globe names the
+towns the shadow crosses, with a pin at each: gold along the path carrying how
+long the Sun goes out there, cooling to blue further off carrying how much of
+it is covered.  Which places get named is a judgement rather than a threshold.
+A map should be dense along the track and sparse away from it, so places are
+sorted into bands by what they see and each band gets its own minimum spacing
+on the ground -- a town of forty thousand in the path beats a capital at ninety
+per cent, because the first is where you would go.  For 2027 that puts Luxor,
+Jeddah and Málaga on the track and London, at 42%, five hundred miles north of
+it.  Labels thin out as you zoom out and reappear as you zoom in, since
+crowding is a fact about the view and not about the data.
+
 `examples/build_site.py` builds a directory of them with an index written from
 the computed eclipses, which is what `docs/` holds and what GitHub Pages
-serves.  The six it picks are not the six prettiest: they are the antimeridian
+serves.  It also writes `globe.html`, all six in one page with a picker: a
+bundle stores the coastlines and the constants once for the lot rather than
+once each, so six eclipses come to 320 kB rather than six times 135.  The six it picks are not the six prettiest: they are the antimeridian
 crossing, the high-latitude path, the annular that never reaches full coverage,
 the hybrid that changes kind part way along, and the partial with no umbra to
 draw at all -- the cases that broke things while this was being built.
 
 ```
-python3 examples/build_site.py ne_110m_land.geojson --out docs
+curl -sO https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_populated_places_simple.geojson
+python3 examples/build_site.py ne_110m_land.geojson --out docs \
+    --places ne_10m_populated_places_simple.geojson
 ```
 
 The shadow on the globe is not a texture.  The scene carries the Sun's and the
@@ -504,7 +520,7 @@ named constants at the top of each plotting script and are trivial to swap.
 python3 tests/test_eclipsepath.py        # 46 tests, also runs under pytest
 python3 tests/test_shadow.py             # 17 tests: the instantaneous footprint
 python3 tests/test_animation.py          # 8 tests: the animated map
-python3 tests/test_webgl.py              # 6 tests: the globe, in a real browser
+python3 tests/test_webgl.py              # 12 tests: the globe, in a real browser
 python3 tests/verify_against_nasa.py     # row-by-row against NASA path tables
 python3 tests/verify_usno.py             # local circumstances vs the USNO
 python3 tests/verify_besselian.py        # local circumstances vs NASA elements
@@ -516,7 +532,10 @@ python3 tests/verify_rendering.py        # every geometry the renderer is handed
 `tests/test_webgl.py` needs Playwright and a Chromium (`pip install playwright
 && playwright install chromium`); without them it reports itself skipped rather
 than failing, since nothing else in the suite wants a browser.  Point it at an
-existing build with `ECLIPSEPATH_CHROMIUM`.
+existing build with `ECLIPSEPATH_CHROMIUM`, and at the two Natural Earth files
+with `ECLIPSEPATH_COASTLINES` and `ECLIPSEPATH_PLACES`.  Every named place is
+checked against `circumstances_at` for that place: the pins are the part a
+reader will believe without checking, so they are the part worth checking.
 
 The two local-circumstance checks read cached third-party responses from
 `tests/data` and need no network.  Refresh them with

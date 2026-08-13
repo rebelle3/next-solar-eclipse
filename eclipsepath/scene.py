@@ -87,7 +87,7 @@ def rings_from_geojson(path, places=3):
 
 
 def build(eclipse, timescale, coastlines=None,
-          cadence_seconds=CADENCE_SECONDS):
+          cadence_seconds=CADENCE_SECONDS, named_places=None):
     """Everything the viewer needs, as plain JSON-able data."""
     times, step = sample_times(eclipse, cadence_seconds)
     sun, moon = tracks(eclipse.window, times)
@@ -159,9 +159,56 @@ def build(eclipse, timescale, coastlines=None,
         'path': {'centre': centre, 'north': limits['north'],
                  'south': limits['south']},
         'coastlines': rings_from_geojson(coastlines) if coastlines else [],
+        'places': [_pin(place, times[0]) for place in (named_places or [])],
         'generated_utc': dt.datetime.now(dt.timezone.utc)
                            .strftime('%Y-%m-%dT%H:%M:%SZ'),
     }
+
+
+def _pin(place, tt0):
+    """One named place, with its timings as seconds from the first sample.
+
+    Seconds rather than Julian days: a label needs three timestamps, and three
+    nine-figure numbers per place is most of what a scene weighs.
+    """
+    def offset(tt):
+        return round((tt - tt0) * 86400.0, 1)
+    return {
+        'name': place['name'],
+        'country': place['country'],
+        'lat': place['latitude'],
+        'lon': place['longitude'],
+        'pop': place['population'],
+        'obs': place['obscuration'],
+        'alt': place['sun_altitude'],
+        'central': place['central'],
+        'dur': place['central_seconds'] if place['central'] else 0.0,
+        'c1': offset(place['tt_first_contact']),
+        'max': offset(place['tt_maximum']),
+        'c4': offset(place['tt_last_contact']),
+    }
+
+
+def bundle(scenes):
+    """Several eclipses in one payload, with what they share stored once.
+
+    The coastlines are the same 60 kB whichever eclipse is being looked at, and
+    so are the radii and the shape of the Earth; six copies of them would be
+    most of the file.
+    """
+    scenes = list(scenes)
+    if not scenes:
+        raise ValueError('no scenes to bundle')
+    shared = {'coastlines': scenes[0]['coastlines'],
+              'constants': scenes[0]['constants']}
+    trimmed = []
+    for one in scenes:
+        rest = {k: v for k, v in one.items()
+                if k not in ('coastlines', 'constants')}
+        trimmed.append(rest)
+    shared['scenes'] = trimmed
+    shared['generated_utc'] = scenes[0]['generated_utc']
+    return shared
 
 
 def _seconds_of_day(timescale, tt):
@@ -202,6 +249,14 @@ def main(argv=None):
     parser.add_argument('--cadence', type=float, default=CADENCE_SECONDS,
                         metavar='SECONDS')
     parser.add_argument('--samples', type=int, default=160)
+    parser.add_argument('--places', metavar='GEOJSON', default=None,
+                        help='Natural Earth populated places, to name the '
+                             'towns the shadow crosses')
+    parser.add_argument('--place-floor', type=float, default=40.0,
+                        metavar='PCT',
+                        help='least coverage a place must see to be named '
+                             '(default: 40)')
+    parser.add_argument('--place-limit', type=int, default=90, metavar='N')
     parser.add_argument('--kernel', default=None)
     parser.add_argument('--quiet', '-q', action='store_true')
     args = parser.parse_args(argv)
@@ -221,16 +276,27 @@ def main(argv=None):
         raise SystemExit('no solar eclipse on %s' % args.date)
     note('tracing the path...')
     eclipse = ec.analyse(ephem, events[0], threshold=1.0, samples=args.samples)
-    scene = build(eclipse, ts, args.coastlines, args.cadence)
+    named = []
+    if args.places:
+        from . import places as places_module
+        note('choosing places to name...')
+        catalogue = places_module.load(args.places)
+        named = places_module.describe(
+            eclipse, catalogue,
+            places_module.select(eclipse, catalogue,
+                                 floor=args.place_floor / 100.0,
+                                 limit=args.place_limit))
+    scene = build(eclipse, ts, args.coastlines, args.cadence, named)
 
     out = args.out or ('eclipse_%s.%s' % (args.date.replace('-', ''),
                                           'json' if args.json else 'html'))
     text = dumps(scene) if args.json else standalone(scene)
     with open(out, 'w') as handle:
         handle.write(text)
-    print('wrote %s (%.0f kB, %d position samples, %d coastline rings)'
+    print('wrote %s (%.0f kB, %d position samples, %d coastline rings, '
+          '%d places)'
           % (out, len(text) / 1024.0, scene['time']['count'],
-             len(scene['coastlines'])))
+             len(scene['coastlines']), len(scene['places'])))
     return 0
 
 
