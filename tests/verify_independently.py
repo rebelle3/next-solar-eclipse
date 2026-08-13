@@ -9,7 +9,6 @@ share only the ephemeris file and the circle-overlap formula, so agreement is
 evidence about the pipeline rather than a restatement of it.
 """
 
-import math
 import os
 import sys
 

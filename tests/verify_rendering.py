@@ -8,11 +8,9 @@ spread of eclipses across the century, builds the GeoJSON for each, and checks
 it mechanically rather than by looking at pictures.
 """
 
-import json
 import os
 import sys
 
-import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))

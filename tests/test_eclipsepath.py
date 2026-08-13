@@ -397,8 +397,7 @@ def test_region_boundary_sits_on_the_threshold():
                                ts.utc(2029, 1, 31).tt)[0]
     result = ec.analyse(ephem, event, threshold=0.6, samples=30)
     region = result.coverage_region
-    # Refinement only ever adds vertices to the even sweep it starts from.
-    assert len(region.points) >= ec.REGION_RAYS
+    assert len(region.points) == ec.REGION_RAYS
     grid = np.linspace(result.tt_first_contact, result.tt_last_contact,
                        ec.PREDICATE_TIME_SAMPLES)
     def peak_at(lat, lon):
@@ -428,17 +427,20 @@ def test_region_boundary_sits_on_the_threshold():
     assert checked > 40, 'expected much of the outline to be a clean contour'
     assert grazing, 'expected part of the outline to run along the terminator'
 
-    # The outline must also be smooth, not merely accurate: an edge drawn from
-    # vertices hundreds of kilometres apart is a row of facets even when every
-    # one of them is on the contour.  This is what the refinement guarantees.
+    # Accurate is not the same as smooth.  The outline is an even sweep of
+    # rays out from the deepest point, so its vertices are roughly a degree of
+    # azimuth apart along most of it and much further apart at the two ends,
+    # where the edge runs nearly along the rays and its distance changes
+    # faster than any angular spacing follows.  Splitting the rays finer buys
+    # a finer staircase there rather than closing the gap; fixing it properly
+    # means following the edge round instead of measuring out to it.  This
+    # pins the spacing that is achieved so it cannot quietly get worse.
     lat = np.array([p.latitude for p in region.points])
     lon = np.array([p.longitude for p in region.points])
     gap = g.geodesic_distance(lat, lon, np.roll(lat, -1), np.roll(lon, -1))
-    # Most of the outline is resolved to the refinement target.  The two ends
-    # are not, and cannot be: there the edge runs so nearly along the rays that
-    # its distance changes faster than any angular spacing follows, so
-    # splitting buys a finer staircase rather than closing the gap.  Fixing
-    # that means following the edge round instead of measuring out to it.
+    assert np.median(gap) < 120.0, np.median(gap)
+    assert np.percentile(gap, 90) < 150.0, np.percentile(gap, 90)
+    assert gap.max() < 500.0, gap.max()
     assert result.coverage_region.centre_latitude == region.centre_latitude
     centre = cc.peak_eclipse(result.window,
                              g.geodetic_to_itrf(region.centre_latitude,

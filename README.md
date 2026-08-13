@@ -217,7 +217,10 @@ about 2% on path width and central duration.
 
 Verified against NASA/Espenak's published tables. `tests/verify_against_nasa.py`
 compares full path tables row by row; `tests/test_eclipsepath.py` covers the
-Five Millennium Catalog and the geometry itself.
+Five Millennium Catalog and the geometry itself.  Two further checks ask third
+parties what a *particular place* sees, which is what the package is for:
+`tests/verify_usno.py` against the US Naval Observatory's API, and
+`tests/verify_besselian.py` against NASA's published Besselian elements.
 
 All 25 solar eclipses from 2026 to 2036 are found, each classified correctly as
 total, annular, hybrid or partial, with:
@@ -323,6 +326,69 @@ The effect on results is what the literature would lead you to expect: for the
 southern limits sample opposite sides of the limb and pick up different terrain,
 while the duration on the centre line barely moves.
 
+### Local circumstances, against two independent sources
+
+The path checks above compare an eclipse's global figures.  What a given site
+sees is checked separately, against sources that share nothing with this
+package but the underlying astronomy.
+
+The **US Naval Observatory** computes local circumstances with its own
+Besselian code; its tables stop after 2026, so the comparison runs over 26 past
+eclipses at 440 sites, spread by coverage from a 3% graze to the centre line:
+
+| Quantity | Mean | Worst |
+| --- | --- | --- |
+| Obscuration | 0.035% | 0.13% |
+| Magnitude | 0.00028 | 0.00071 |
+| Sun altitude at maximum | 0.025 deg | 0.09 deg |
+| First contact | 0.9 s | 3.4 s |
+| Time of maximum | 0.9 s | 12.3 s |
+| Last contact | 1.7 s | 5.2 s |
+
+**NASA's Besselian elements** cover any date, so the same comparison runs on
+into the future: 33 eclipses from 2015 to 2049 at 452 sites.  The elements come
+from VSOP87/ELP2000-82 rather than JPL DE440s, and reducing them to local
+circumstances is the classical algorithm rather than this package's vector
+geometry, so the two agree on the answer without sharing the route to it:
+
+| Quantity | Mean | Worst |
+| --- | --- | --- |
+| Obscuration | 0.014% | 0.033% |
+| Magnitude | 0.00018 | 0.00039 |
+| Central duration | 0.11 s | 1.1 s |
+| First contact | 1.7 s | 4.3 s |
+| Last contact | 2.6 s | 5.6 s |
+
+Three things came out of running both that are worth stating plainly.
+
+**The two authorities disagree with each other more than either disagrees with
+this package.** On central duration, at 54 sites where all three can be asked:
+
+| Comparison | Mean | Worst |
+| --- | --- | --- |
+| This package vs NASA | 0.08 s | 0.33 s |
+| USNO vs NASA | 2.16 s | 4.65 s |
+
+USNO's totalities run about two seconds longer than NASA's and its annularities
+about two seconds shorter — the signature of a slightly larger lunar radius in
+the umbral cone.  This package sits on NASA's figures because it adopts NASA's
+k.
+
+**Partial contact times cost about two seconds.** NASA uses two lunar radii,
+k = 0.272488 for penumbral contacts and 0.272281 for umbral ones; this package
+uses the one value throughout.  Switching to NASA's penumbral k improves first
+and last contact from 1.7/2.6 s to 0.47/0.39 s and takes central duration from
+0.11 s to 3.9 s, which is the wrong trade: the central phase is the part anyone
+plans around.
+
+**Where the Sun sets mid-eclipse the two report different things on purpose.**
+USNO quotes an eclipse's greatest magnitude at a site whether or not anyone
+could see it; this package quotes the deepest phase actually above the horizon.
+At 50N 10W on 8 April 2024, USNO says 88.9% and this package says 33.8%,
+because the Sun sets 25 minutes into the eclipse.  Both are right about
+different questions; 127 of the 440 sites are of this kind and are reported
+apart.
+
 ## Data sources and licensing
 
 Nothing here is copyleft and nothing requires attribution as a condition of use.
@@ -337,12 +403,18 @@ Nothing here is copyleft and nothing requires attribution as a condition of use.
 | Lunar orientation kernels | JPL NAIF | US Government work, public domain |
 | LOLA elevation model | NASA PDS | US Government work, public domain |
 | Country and land outlines | Natural Earth | Public domain, no attribution required |
+| NASA Besselian elements (tests) | eclipse.gsfc.nasa.gov | US Government work; reproduced with the acknowledgment below |
+| USNO local circumstances (tests) | aa.usno.navy.mil API | US Government work, public domain |
 
 No data files are bundled; everything above is fetched on first use. The only
 third-party content committed to this repository is `tests/data/*.json`, a few
 dozen reference values (times, coordinates, widths, durations) transcribed from
 NASA's published eclipse tables for verification. Those are measurements rather
 than creative work, and they are used only by the test suite.
+
+NASA asks that its eclipse predictions be reproduced with the acknowledgment
+"Eclipse Predictions by Fred Espenak, NASA's GSFC", which is given here and in
+`tests/scrape_besselian.py`.  Nothing in `tests/data` is used at runtime.
 
 Physical constants in the source — the solar radius, both lunar radius
 conventions, the WGS84 ellipsoid, horizon refraction, the synodic month — are
@@ -356,9 +428,19 @@ named constants at the top of each plotting script and are trivial to swap.
 ## Tests
 
 ```
-python3 tests/test_eclipsepath.py        # 39 tests, also runs under pytest
+python3 tests/test_eclipsepath.py        # 46 tests, also runs under pytest
 python3 tests/verify_against_nasa.py     # row-by-row against NASA path tables
+python3 tests/verify_usno.py             # local circumstances vs the USNO
+python3 tests/verify_besselian.py        # local circumstances vs NASA elements
+python3 tests/verify_century.py          # every eclipse for a century
+python3 tests/verify_independently.py    # against a naive second implementation
+python3 tests/verify_rendering.py        # every geometry the renderer is handed
 ```
+
+The two local-circumstance checks read cached third-party responses from
+`tests/data` and need no network.  Refresh them with
+`python3 tests/verify_usno.py --fetch` and `python3 tests/scrape_besselian.py
+YYYYMMDD ...`.
 
 The first takes a few minutes: most of it recomputes the whole 2026-2036 scan
 and traces real paths rather than mocking any of it.
@@ -371,5 +453,7 @@ Set `ECLIPSEPATH_KERNEL` or pass the kernel path to reuse an existing download.
 * [NASA path table, 2026 Aug 12](https://eclipse.gsfc.nasa.gov/SEpath/SEpath2001/SE2026Aug12Tpath.html)
 * [NASA path table, 2026 Feb 17](https://eclipse.gsfc.nasa.gov/SEpath/SEpath2001/SE2026Feb17Apath.html)
 * [NASA path table, 2033 Mar 30](https://eclipse.gsfc.nasa.gov/SEpath/SEpath2001/SE2033Mar30Tpath.html)
+* [NASA Besselian elements, by eclipse](https://eclipse.gsfc.nasa.gov/SEsearch/SEsearch.php) — "Eclipse Predictions by Fred Espenak, NASA's GSFC"
+* [USNO solar eclipse API](https://aa.usno.navy.mil/data/api) — US Naval Observatory, Astronomical Applications Department
 * [Mean lunar radius and the two values of k](https://www.eclipsewise.com/solar/SEhelp/SEradius.html)
 * [JPL DE440 ephemeris](https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/)

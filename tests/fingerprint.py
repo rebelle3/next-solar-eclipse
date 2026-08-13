@@ -15,12 +15,10 @@ import json
 import os
 import sys
 
-import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
-from eclipsepath import circumstances as cc  # noqa: E402
 from eclipsepath import eclipse as ec  # noqa: E402
 from eclipsepath import finder, geometry as g, output  # noqa: E402
 from eclipsepath.ephemeris import Ephemeris  # noqa: E402
