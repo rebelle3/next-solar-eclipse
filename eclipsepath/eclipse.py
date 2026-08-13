@@ -392,7 +392,7 @@ def _central_label(eclipse):
             'H': 'totality/annularity'}.get(eclipse.kind, 'central')
 
 
-def _trace_band(window, coarse, tt, lat, lon, depth, label, iterations=36):
+def _trace_band(window, coarse, tt, lat, lon, depth, label, iterations=30):
     """Trace the edges of the region where ``depth`` is met, per track sample."""
     n = len(tt)
     heading = _spine_heading(window, tt)

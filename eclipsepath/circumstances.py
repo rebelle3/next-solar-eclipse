@@ -72,7 +72,7 @@ def _separation_at(window, itrf_col, tt):
     return g.separation(sun - site, moon - site)
 
 
-def _golden_min(func, lo, hi, iterations=32):
+def _golden_min(func, lo, hi, iterations=24):
     """Vectorised golden-section minimisation of a unimodal ``func``."""
     lo = np.array(lo, float, copy=True)
     hi = np.array(hi, float, copy=True)
@@ -190,7 +190,17 @@ def _evaluate(window, itrf_xyz, tt, depth, require_visible, tolerance=0.0):
 
 
 def _better(a, b):
-    take = b['depth'] > a['depth']
+    """Keep whichever candidate is deeper, nearest mid-eclipse breaking ties.
+
+    Inside totality the obscuration is flat at 1, so depth alone leaves every
+    instant of it tied and the winner falls to whichever the grid happened to
+    offer first — which makes the reported time of maximum depend on the grid.
+    Separation keeps falling to mid-eclipse throughout, so it settles the tie
+    the way the question is meant: the middle of totality, not its start.
+    """
+    deeper = b['depth'] > a['depth']
+    tied = b['depth'] == a['depth']
+    take = deeper | (tied & (b['separation'] < a['separation']))
     return {key: np.where(take, b[key], a[key]) for key in a}
 
 
@@ -234,7 +244,29 @@ def contact_times(window, itrf_xyz, tt_grid):
                 return tt_grid[a], tt_grid[b]
         return None
 
+    # Bracketing off the grid alone misses a short central phase entirely: a
+    # site catching 59 s of totality reports none if the samples happen to
+    # straddle it.  Refine the deepest instant first, then start the search
+    # from a sample known to be inside if the refined instant says there is a
+    # central phase at all.
     pivot = int(np.argmin(sep))
+    refined = float(_golden_min(lambda tt: _separation_at(window, col[:, :, None], tt),
+                                np.array([tt_grid[max(pivot - 1, 0)]]),
+                                np.array([tt_grid[min(pivot + 1, len(tt_grid) - 1)]]))[0])
+    deep = state_at(window, col, np.array([refined]))
+    central_now = np.ravel(np.abs(deep['r_moon'] - deep['r_sun'])
+                           - deep['separation'])[0]
+    if central_now > 0.0:
+        # Central at the refined instant; splice it in so the scan brackets it.
+        insert = int(np.searchsorted(tt_grid, refined))
+        tt_grid = np.insert(tt_grid, insert, refined)
+        r_sun = np.insert(r_sun, insert, np.ravel(deep['r_sun'])[0])
+        r_moon = np.insert(r_moon, insert, np.ravel(deep['r_moon'])[0])
+        sep = np.insert(sep, insert, np.ravel(deep['separation'])[0])
+        alt = np.insert(alt, insert, np.ravel(deep['sun_altitude'])[0])
+        outer = sep - (r_sun + r_moon)
+        inner = sep - np.abs(r_moon - r_sun)
+        pivot = insert
     result = {}
     for name, series, direction in (('c1', outer, -1), ('c4', outer, +1),
                                     ('c2', inner, -1), ('c3', inner, +1)):

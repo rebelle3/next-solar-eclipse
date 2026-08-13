@@ -519,6 +519,52 @@ def test_centre_line_observer_sees_totality():
     assert seen['tt_second_contact'] < seen['tt_third_contact']
 
 
+def test_short_totality_survives_a_coarse_grid():
+    """A brief central phase must not fall between the samples.
+
+    Reykjavik catches 59 s of totality in 2026.  Bracketing the contacts from
+    the sample grid alone used to step straight over that and report none, and
+    silently: the shorter the totality, the more likely it vanished, which is
+    exactly the sites nearest a path edge.
+    """
+    ephem = ephemeris()
+    ts = ephem.timescale
+    event = finder.find_events(ephem, ts.utc(2026, 8, 1).tt,
+                               ts.utc(2026, 8, 31).tt)[0]
+    window = EclipseWindow(ephem, event.tt_first_contact - 0.005,
+                           event.tt_last_contact + 0.005)
+    xyz = g.geodetic_to_itrf(64.1466, -21.9426)
+    durations = []
+    for samples in (31, 61, 121, 181, 601):
+        grid = np.linspace(event.tt_first_contact, event.tt_last_contact, samples)
+        durations.append(cc.contact_times(window, xyz, grid)['central_seconds'])
+    assert min(durations) > 55.0, durations
+    assert max(durations) - min(durations) < 0.05, durations
+
+
+def test_time_of_maximum_does_not_depend_on_the_grid():
+    """Inside totality every instant is equally deep, so the tie needs breaking.
+
+    Obscuration is flat at 1 right across totality.  Ranking on that alone left
+    the winner to whichever instant the grid offered first, moving the reported
+    maximum by seconds when the grid changed; separation still falls to
+    mid-eclipse, so it settles the tie meaningfully.
+    """
+    ephem = ephemeris()
+    ts = ephem.timescale
+    event = finder.find_events(ephem, ts.utc(2026, 8, 1).tt,
+                               ts.utc(2026, 8, 31).tt)[0]
+    window = EclipseWindow(ephem, event.tt_first_contact - 0.005,
+                           event.tt_last_contact + 0.005)
+    xyz = g.geodetic_to_itrf(64.1466, -21.9426)
+    times = []
+    for samples in (61, 121, 181, 361, 601):
+        grid = np.linspace(event.tt_first_contact, event.tt_last_contact, samples)
+        times.append(float(cc.peak_eclipse(window, xyz, grid)['t'][0]))
+    spread = (max(times) - min(times)) * 86400.0
+    assert spread < 0.01, 'time of maximum moved %.3f s with the grid' % spread
+
+
 def test_night_side_sees_nothing():
     ephem = ephemeris()
     ts = ephem.timescale
