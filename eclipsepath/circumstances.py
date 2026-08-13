@@ -73,7 +73,14 @@ def _separation_at(window, itrf_col, tt):
 
 
 def _golden_min(func, lo, hi, iterations=24):
-    """Vectorised golden-section minimisation of a unimodal ``func``."""
+    """Vectorised golden-section minimisation of a unimodal ``func``.
+
+    One evaluation per iteration, not two.  The golden ratio is chosen so that
+    whichever interior point survives the shrink lands exactly where one of the
+    next pair is needed (phi squared equals one minus phi), so it carries its
+    value over and only its partner has to be worked out.  Same sequence of
+    intervals, half the calls.
+    """
     lo = np.array(lo, float, copy=True)
     hi = np.array(hi, float, copy=True)
     x1 = hi - GOLDEN * (hi - lo)
@@ -83,9 +90,17 @@ def _golden_min(func, lo, hi, iterations=24):
         take_left = f1 < f2
         hi = np.where(take_left, x2, hi)
         lo = np.where(take_left, lo, x1)
-        x1 = hi - GOLDEN * (hi - lo)
-        x2 = lo + GOLDEN * (hi - lo)
-        f1, f2 = func(x1), func(x2)
+        # Keeping the left interval reuses x1 as the new x2, and vice versa;
+        # the fresh point is whichever the shrink did not preserve.
+        kept_x = np.where(take_left, x1, x2)
+        kept_f = np.where(take_left, f1, f2)
+        fresh_x = np.where(take_left, hi - GOLDEN * (hi - lo),
+                           lo + GOLDEN * (hi - lo))
+        fresh_f = func(fresh_x)
+        x1 = np.where(take_left, fresh_x, kept_x)
+        f1 = np.where(take_left, fresh_f, kept_f)
+        x2 = np.where(take_left, kept_x, fresh_x)
+        f2 = np.where(take_left, kept_f, fresh_f)
     return 0.5 * (lo + hi)
 
 
