@@ -32,8 +32,10 @@ REGION_LIMIT_KM = 16000.0
 REGION_GAP_FRACTION = 0.02      # of the outline's mean reach
 REGION_MIN_GAP_KM = 25.0
 REGION_MAX_GAP_KM = 150.0
-REGION_VERTEX_BUDGET = 2.0     # cap on growth, as a multiple of rays
-REGION_REFINE_ROUNDS = 3
+REGION_VERTEX_BUDGET = 6.0     # cap on growth, as a multiple of rays
+REGION_REFINE_ROUNDS = 9
+REGION_PROBE_KM = 10.0         # step used to look past a crossing
+REGION_PROBE_STEPS = 20
 SEARCH_LIMIT_KM = 12000.0
 NEW_MOON_EPOCH_TT = 2451550.09766   # 2000 Jan 6 new moon, TT Julian day
 SYNODIC_MONTH = 29.530588861
@@ -522,31 +524,30 @@ def _is_strip(band):
 
 
 def _trace_region(window, coarse, tt_centre, threshold, label,
-                  rays=REGION_RAYS, iterations=36, max_gap_km=None,
+                  rays=REGION_RAYS, iterations=30, max_gap_km=None,
                   max_vertices=None):
     """Outline of the area reaching ``threshold``, swept out from its centre.
 
-    Rays are cast from the deepest point of the eclipse and each is bisected
-    for where coverage falls through the threshold.  Coverage falls away with
-    distance from that point, so each ray crosses the edge once.  Part of the
-    outline is usually the terminator rather than a coverage contour, where
-    coverage stops abruptly because the Sun has set.
+    Rays are cast from the deepest point of the eclipse and each is searched
+    for where coverage falls through the threshold.  Part of the outline is
+    usually the terminator rather than a coverage contour, where coverage stops
+    abruptly because the Sun has set rather than thinning.
 
-    Evenly spaced rays alone are not enough.  These areas are long and thin, so
-    towards their two ends the rays arrive almost along the edge rather than
-    across it, and neighbouring rays can land hundreds of kilometres apart —
-    which draws the edge as a row of facets.  Rays are therefore added between
-    any two that landed further apart than ``max_gap_km`` until the whole
-    outline is resolved to that spacing.
+    Evenly spaced rays are not enough.  These areas are long and thin, so
+    towards their two ends the edge runs steeply against the bearing — measured
+    on the 2027 eclipse it moves 892 km per degree — and evenly spaced rays
+    land far enough apart there to draw the edge as a row of facets.  Steep is
+    not discontinuous though, so halving the spacing halves the gap: rays are
+    added between the widest-separated neighbours, round after round, and the
+    gap closes.  Each round refines only the worst gaps, because that sector
+    needs depth rather than breadth.
     """
     depth = cc.obscuration_depth(threshold)
     centre, _ = _track(window, np.atleast_1d(tt_centre))
     centre_lat, centre_lon, _ = g.itrf_to_geodetic(centre)
     centre_lat, centre_lon = float(centre_lat[0]), float(centre_lon[0])
 
-    def edge_at(azimuth):
-        lo = np.zeros(len(azimuth))
-        hi = np.full(len(azimuth), REGION_LIMIT_KM)
+    def bisect(azimuth, lo, hi):
         for _ in range(iterations):
             mid = 0.5 * (lo + hi)
             mid_lat, mid_lon = g.great_circle_destination(centre_lat, centre_lon,
@@ -555,6 +556,34 @@ def _trace_region(window, coarse, tt_centre, threshold, label,
             lo = np.where(ok, mid, lo)
             hi = np.where(ok, hi, mid)
         return 0.5 * (lo + hi)
+
+    def edge_at(azimuth):
+        """Distance to the *outermost* edge along each bearing.
+
+        Bisection alone finds an edge, not the last one.  Near the terminator
+        coverage can dip through the threshold and back within a few
+        kilometres, so a ray crosses three or more times; neighbouring rays
+        then settle on different crossings and the outline picks up a wobble of
+        tens of kilometres.  Probing outwards from the crossing found settles
+        which one is last.
+        """
+        distance = bisect(azimuth, np.zeros(len(azimuth)),
+                          np.full(len(azimuth), REGION_LIMIT_KM))
+        steps = np.arange(1, REGION_PROBE_STEPS + 1) * REGION_PROBE_KM
+        probe = distance[:, None] + steps
+        probe_lat, probe_lon = g.great_circle_destination(
+            centre_lat, centre_lon, azimuth[:, None], probe)
+        beyond = _meets(window, coarse, probe_lat.ravel(),
+                        probe_lon.ravel(), depth).reshape(probe.shape)
+        if not beyond.any():
+            return distance
+        # The last probe still inside sits on the outermost lobe; re-bisect
+        # between it and the next probe out, which is beyond the lobe.
+        found = beyond.any(axis=1)
+        last = beyond.shape[1] - 1 - np.argmax(beyond[:, ::-1], axis=1)
+        inside = distance + (last + 1) * REGION_PROBE_KM
+        further = bisect(azimuth, inside, inside + REGION_PROBE_KM)
+        return np.where(found, further, distance)
 
     azimuth = np.linspace(0.0, 360.0, rays, endpoint=False)
     distance = edge_at(azimuth)
@@ -573,12 +602,12 @@ def _trace_region(window, coarse, tt_centre, threshold, label,
         wide = np.nonzero(gap > max_gap_km)[0]
         if not len(wide):
             break
-        room = max_vertices - len(azimuth)
+        room = min(max(8, len(azimuth) // 2), max_vertices - len(azimuth))
         wide = wide[np.argsort(gap[wide])[::-1][:room]]
         span = (np.roll(azimuth, -1)[wide] - azimuth[wide]) % 360.0
-        extra = edge_at((azimuth[wide] + span / 2.0) % 360.0)
-        azimuth = np.concatenate([azimuth, (azimuth[wide] + span / 2.0) % 360.0])
-        distance = np.concatenate([distance, extra])
+        middle = (azimuth[wide] + span / 2.0) % 360.0
+        azimuth = np.concatenate([azimuth, middle])
+        distance = np.concatenate([distance, edge_at(middle)])
         order = np.argsort(azimuth)
         azimuth, distance = azimuth[order], distance[order]
 
