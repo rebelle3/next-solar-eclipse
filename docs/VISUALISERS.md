@@ -76,13 +76,42 @@ A fourth, checked and dropped: comparing an instantaneous contour against
 `coverage_region` was in the plan, but that region is the maximum over the
 whole eclipse, so there is no instant at which the two should agree.
 
-### Phase 2 — `examples/animate_shadow.py`  [ ]
-- [ ] Frames from first to last contact, umbra + penumbra + coverage contours + terminator
-- [ ] Land from the same Natural Earth file `plot_path.py` takes
-- [ ] GIF via Pillow; MP4 when an ffmpeg writer is present
-- [ ] Caption driven by the data, never hardcoded — the `plot_path.py` lesson
-- [ ] Test: frame count, monotone shadow motion, and a pixel check that the
-      umbra centre lands on the right pixel in a known frame
+### Phase 2 — `examples/animate_shadow.py`  [x]
+- [x] Frames from first to last contact: coverage as a greyscale field, the
+      umbra at true size, contours at 20/40/60/80%, terminator, night side
+- [x] Land from the same Natural Earth file `plot_path.py` takes
+- [x] GIF via Pillow; MP4 when an ffmpeg writer is present
+- [x] Caption driven by the data, never hardcoded — the `plot_path.py` lesson
+- [x] 8 tests in `tests/test_animation.py`, including a real render whose
+      darkest umbra-coloured pixel is inverted back to degrees and compared
+      with the computed centre
+
+What it turned up:
+
+* **`visible_extent` claimed the whole world for the 2028 total.**  Each frame's
+  longitudes were unwrapped about that frame's own centre, so as the shadow
+  crossed the antimeridian one frame came back around +190 and the next around
+  -170, and the union of the two spanned 360 degrees.  One reference for all
+  frames fixes it; the view is now 150 degrees wide.
+* **Vector overlays needed repeating a turn either side.**  A curve is handed
+  back with its longitudes made continuous, which puts the terminator's far
+  branch at +208 — off the right of a view that badly needed it on the left.
+  It was drawing as a hard diagonal cut with no gold line on it.
+* **`imshow` was given sample centres as if they were array edges**, sliding
+  the whole coverage field half a cell, 28 km at the default step.
+* `output.format_duration` is built for the minutes and seconds of totality and
+  called a five-hour eclipse `313m01.7s`; the example spells hours out itself
+  rather than changing what the path tables print.
+
+### Phase 3 — `eclipsepath/scene.py`, the web export  [x]
+- [x] One eclipse to a compact JSON scene: Sun and Moon in the Earth-fixed
+      frame at one sample a minute, plus the constants and the traced path
+- [x] Coastlines from Natural Earth land at 1:110m — 127 rings, 5091 points,
+      no decimation needed
+- [x] Writes a standalone page with the scene baked in: a file opened from
+      disk cannot fetch its neighbours, and the point is that it works with no
+      server and no network
+- [x] 127 kB for the whole 2027 page, scene included
 
 ### Phase 3 — `eclipsepath/scene.py`, the web export  [ ]
 - [ ] One eclipse to a compact JSON scene: Sun and Moon geocentric positions and
@@ -92,14 +121,21 @@ whole eclipse, so there is no instant at which the two should agree.
 - [ ] Test: JS-side interpolation of the samples reproduces Python's own
       `window.at(tt)` to < 1 km at instants between samples
 
-### Phase 4 — `web/` viewer  [ ]
-- [ ] Raw WebGL 2: sphere mesh, orbit camera, coastline overlay
-- [ ] Fragment shader computes obscuration per pixel from the same formula as
-      `geometry.obscuration` — a real shadow, not a texture pasted on
-- [ ] Sun and Moon drawn in their real directions, at true angular size, with
-      the Moon's orbit traced
-- [ ] Time scrubber, play/pause, speed; reads the scene JSON
-- [ ] Single self-contained page; strictly no external requests
+### Phase 4 — `eclipsepath/viewer.html`  [ ] in progress
+- [x] Raw WebGL 2: ellipsoid mesh, orbit camera, coastlines, graticule, path
+- [x] Fragment shader computes obscuration per pixel from the same
+      circle-overlap as `geometry.obscuration` — a real shadow, not a texture
+- [x] Time scrubber, play/pause, speed, live readouts
+- [x] Single self-contained page, no external requests
+- [ ] Sun and Moon drawn in their real directions, with the umbral cone and
+      the Moon's track
+
+Confirmed so far: the shader agrees with the same arithmetic in double
+precision to 2e-5 of obscuration, so float32 in the fragment shader is not the
+limit on anything.  Float colour targets have to be asked for by name --
+without `EXT_color_buffer_float` the framebuffer comes back incomplete and
+every draw is silently discarded, which reads exactly like a shader returning
+zero.
 
 ### Phase 5 — automated tests for the viewer  [ ]
 - [ ] `tests/test_webgl.py`: headless Chromium via Playwright
