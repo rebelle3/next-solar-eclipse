@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Eclipse globes</title>
+<style>
+  :root { --surface:#101319; --panel:#171b23; --ink:#f2f3f5; --ink-2:#9aa1ad;
+          --line:#262b36; --accent:#7fb2f0; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--surface); color:var(--ink);
+         font:16px/1.6 system-ui,sans-serif; }
+  main { max-width:1000px; margin:0 auto; padding:48px 24px 96px; }
+  h1 { font-size:30px; margin:0 0 6px; letter-spacing:-0.01em; }
+  .lede { color:var(--ink-2); margin:0 0 8px; max-width:62ch; }
+  h2 { font-size:20px; margin:48px 0 12px; }
+  .grid { display:grid; gap:16px; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); }
+  a.card { display:block; text-decoration:none; color:inherit; padding:16px 18px;
+           background:var(--panel); border:1px solid var(--line); border-radius:10px; }
+  a.card:hover { border-color:var(--accent); }
+  a.card h3 { margin:0 0 4px; font-size:17px; }
+  a.card p { margin:0 0 10px; color:var(--ink-2); font-size:13.5px; }
+  dl { display:grid; grid-template-columns:auto 1fr; gap:1px 10px; margin:0;
+       font-size:12.5px; color:var(--ink-2); }
+  dd { margin:0; color:var(--ink); font-variant-numeric:tabular-nums; }
+  img { width:100%; border-radius:10px; border:1px solid var(--line); }
+  footer { margin-top:56px; padding-top:20px; border-top:1px solid var(--line);
+           color:var(--ink-2); font-size:13px; }
+  code { background:#0b0e14; padding:1px 5px; border-radius:4px; font-size:12.5px; }
+</style>
+</head>
+<body>
+<main>
+<h1>Eclipse globes</h1>
+<p class="lede">Solar eclipses computed from JPL DE440s with
+<a href="https://github.com/rebelle3/next-solar-eclipse" style="color:var(--accent)">eclipsepath</a>.
+Each globe is one self-contained page: drag to turn, wheel to zoom, scrub or
+play the eclipse through, and press <em>Show the Moon</em> for the shadow cone.</p>
+<p class="lede">The shadow is not a texture. The page carries the Sun's and the
+Moon's positions at a sample a minute, and the fragment shader works out for
+every pixel how much of the Sun is covered at the point of the Earth under it —
+the same circle overlap the Python package uses. It agrees with it to
+2.7&times;10<sup>&minus;5</sup>, and puts the edge of totality within a metre.</p>
+
+<h2>Globes</h2>
+<div class="grid">
+  <a class="card" href="globes/eclipse_20270802.html">
+    <h3>Total, 2027-08-02</h3>
+    <p>The flagship: six minutes of totality over Egypt, the longest on land this century so far.</p>
+    <dl>
+      <dt>Greatest</dt><dd>10:06:41 UTC</dd>
+      <dt>Max coverage</dt><dd>100.00%</dd>
+      <dt>Central</dt><dd>6m22.4s</dd>
+      <dt>Saros</dt><dd>136</dd>
+    </dl>
+  </a>
+  <a class="card" href="globes/eclipse_20260812.html">
+    <h3>Total, 2026-08-12</h3>
+    <p>Iceland and Spain, at a high latitude and a low Sun — the grazing incidence that spreads the shadow along the ground.</p>
+    <dl>
+      <dt>Greatest</dt><dd>17:45:57 UTC</dd>
+      <dt>Max coverage</dt><dd>100.00%</dd>
+      <dt>Central</dt><dd>2m18.1s</dd>
+      <dt>Saros</dt><dd>126</dd>
+    </dl>
+  </a>
+  <a class="card" href="globes/eclipse_20280722.html">
+    <h3>Total, 2028-07-22</h3>
+    <p>Across Australia and New Zealand, over the antimeridian: the case that cut every outline in two.</p>
+    <dl>
+      <dt>Greatest</dt><dd>02:55:30 UTC</dd>
+      <dt>Max coverage</dt><dd>100.00%</dd>
+      <dt>Central</dt><dd>5m09.6s</dd>
+      <dt>Saros</dt><dd>146</dd>
+    </dl>
+  </a>
+  <a class="card" href="globes/eclipse_20260217.html">
+    <h3>Annular, 2026-02-17</h3>
+    <p>Annular over Antarctica. Coverage never reaches 1, and the path runs where a rectangular map is useless.</p>
+    <dl>
+      <dt>Greatest</dt><dd>12:11:57 UTC</dd>
+      <dt>Max coverage</dt><dd>92.73%</dd>
+      <dt>Central</dt><dd>2m19.7s</dd>
+      <dt>Saros</dt><dd>121</dd>
+    </dl>
+  </a>
+  <a class="card" href="globes/eclipse_20311114.html">
+    <h3>Hybrid, 2031-11-14</h3>
+    <p>Hybrid: total along the middle of the track and annular at both ends, as the shadow cone reaches the ground or falls just short of it.</p>
+    <dl>
+      <dt>Greatest</dt><dd>21:06:21 UTC</dd>
+      <dt>Max coverage</dt><dd>100.00%</dd>
+      <dt>Central</dt><dd>1m08.1s</dd>
+      <dt>Saros</dt><dd>143</dd>
+    </dl>
+  </a>
+  <a class="card" href="globes/eclipse_20290114.html">
+    <h3>Partial, 2029-01-14</h3>
+    <p>Partial everywhere. No umbra lands, so there is no path and nothing to draw but the coverage.</p>
+    <dl>
+      <dt>Greatest</dt><dd>17:12:38 UTC</dd>
+      <dt>Max coverage</dt><dd>81.59%</dd>
+      <dt>Central</dt><dd>none — partial everywhere</dd>
+      <dt>Saros</dt><dd>151</dd>
+    </dl>
+  </a>
+</div>
+
+<h2>The shadow on a flat map</h2>
+<p class="lede">The same geometry, cut the same way — coverage everywhere at
+each instant — drawn frame by frame from first to last contact. Greyscale is
+the fraction of the Sun hidden; the gold line is sunrise, past which the
+eclipse is below the horizon.</p>
+<img src="media/eclipse_2027_shadow.gif"
+     alt="The Moon's shadow crossing the Earth on 2 August 2027">
+
+<footer>
+Built by <code>examples/build_site.py</code>. Every figure on this page is
+computed, not typed. Coastlines: Natural Earth, public domain.
+</footer>
+</main>
+</body>
+</html>

@@ -301,6 +301,50 @@ def test_a_screenshot_shows_a_globe_and_a_shadow():
     assert offset < 0.10 * height, (offset, (row, column), (height, width))
 
 
+def test_every_published_globe_loads_clean():
+    """The pages in docs/ are what a visitor gets; check those, not a copy.
+
+    A globe is generated, so it can go stale against the code that generates
+    it, and the partial and the annular exercise branches the flagship total
+    never reaches -- no umbra at all, and coverage that never gets to 1.
+    """
+    if not available():
+        return skip('no playwright or chromium')
+    import glob
+    from playwright.sync_api import sync_playwright
+    folder = os.path.join(os.path.dirname(HERE), 'docs', 'globes')
+    pages = sorted(glob.glob(os.path.join(folder, '*.html')))
+    if not pages:
+        return skip('no built site in docs/globes')
+    with sync_playwright() as play:
+        browser = play.chromium.launch(executable_path=CHROMIUM)
+        for path in pages:
+            problems, requests = [], []
+            page = browser.new_page(viewport={'width': 900, 'height': 640})
+            page.on('pageerror', lambda e: problems.append(str(e)))
+            page.on('console', lambda m: problems.append(m.text)
+                    if m.type == 'error' else None)
+            page.on('request', lambda r: requests.append(r.url))
+            page.goto('file://' + os.path.abspath(path))
+            page.wait_for_timeout(700)
+            ready = page.evaluate(
+                '() => ({probe: typeof window.eclipseShaderProbe, '
+                'kind: SCENE.eclipse.kind, '
+                'covered: document.getElementById("peak").textContent})')
+            page.close()
+            name = os.path.basename(path)
+            assert not problems, (name, problems)
+            assert [u for u in requests if not u.startswith('file://')] == [], name
+            assert ready['probe'] == 'function', (name, ready)
+            # A partial has no axis on the globe and must say so rather than
+            # printing a coverage for a shadow that never lands.
+            if ready['kind'] == 'P':
+                assert ready['covered'] == '\u2014', (name, ready)
+            else:
+                assert ready['covered'].endswith('%'), (name, ready)
+        browser.close()
+
+
 def main():
     tests = [(name, obj) for name, obj in sorted(globals().items())
              if name.startswith('test_') and callable(obj)]

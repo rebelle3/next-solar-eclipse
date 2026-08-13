@@ -163,7 +163,7 @@ python3 examples/animate_shadow.py 2028-07-22 ne_110m_admin_0_countries.geojson 
     --out pacific.mp4 --frames 200 --step 0.4
 ```
 
-![The Moon's shadow crossing the Earth on 2 August 2027](examples/eclipse_2027_shadow.gif)
+![The Moon's shadow crossing the Earth on 2 August 2027](docs/media/eclipse_2027_shadow.gif)
 
 The greyscale is coverage, the contours are every twenty per cent, and the gold
 line is sunrise -- the shadow stops there because past it nobody can see the Sun
@@ -180,6 +180,17 @@ page is raw WebGL 2 with the eclipse baked into it, about 130 kB all told.
 ```
 curl -sO https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_land.geojson
 python3 -m eclipsepath.scene 2027-08-02 ne_110m_land.geojson -o globe.html
+```
+
+`examples/build_site.py` builds a directory of them with an index written from
+the computed eclipses, which is what `docs/` holds and what GitHub Pages
+serves.  The six it picks are not the six prettiest: they are the antimeridian
+crossing, the high-latitude path, the annular that never reaches full coverage,
+the hybrid that changes kind part way along, and the partial with no umbra to
+draw at all -- the cases that broke things while this was being built.
+
+```
+python3 examples/build_site.py ne_110m_land.geojson --out docs
 ```
 
 The shadow on the globe is not a texture.  The scene carries the Sun's and the
