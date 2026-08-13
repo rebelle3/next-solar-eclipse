@@ -43,14 +43,38 @@ visualisers are up, not before.
 
 ## Order of work
 
-### Phase 1 — `eclipsepath/shadow.py`  [ ]
-- [ ] `obscuration_grid`, `outlines` (marching squares), `umbra_outline`, `terminator`
-- [ ] Tests in `tests/test_shadow.py`, each an agreement with something already trusted:
-  - [ ] the umbra outline's centre equals `eclipse.shadow_point` to < 1 km
-  - [ ] the umbra outline's width across the track equals `BandPoint.width_km` to < 2 km
-  - [ ] the 0% contour encloses exactly those sites whose C1..C4 bracket `tt`
-  - [ ] a contour at the threshold agrees with `coverage_region` to < 10 km
-  - [ ] every contour is closed, non-self-intersecting, and monotone-nested
+### Phase 1 — `eclipsepath/shadow.py`  [x]
+- [x] `obscuration_grid`, `contours` (marching squares), `umbra_outline`, `terminator`
+- [x] 17 tests in `tests/test_shadow.py`; the existing 46 still pass
+  - [x] the umbra outline's centre equals `eclipse.shadow_point` to < 1 km
+  - [x] the 0% contour encloses exactly those sites whose C1..C4 bracket `tt`
+  - [x] every contour is closed and nested, and every vertex sits on its level
+        to 1e-9 after refinement
+  - [x] a contour crossing the antimeridian comes back as one continuous loop
+  - [x] the terminator sits on the apparent horizon to 1e-6 degrees
+
+Three things the building of it turned up, each now written into the code:
+
+* **The band limits are not a cut across the umbra.**  `_trace_band` asks
+  whether a place reaches totality *at any time*, so the band edges are the
+  envelope of every umbra the eclipse casts.  The envelope touches each
+  instantaneous outline without crossing it — within 100 m of it with the Sun
+  overhead, several kilometres at grazing incidence near sunrise, where the
+  shadow edge meets the ground almost tangentially.  The planned "width matches
+  `BandPoint.width_km`" check was asserting these were the same curve, which
+  they are not; the tests now assert the containment and the touch instead.
+* **The umbra outline was drawing shadow on the night side.**  Near first
+  contact the cone overruns the limb: a third of the outline was landing where
+  the Sun was up to ten degrees below the horizon.  The footprint is now the
+  cone cut by the lit hemisphere.
+* **`Grid.peak` cannot locate anything during totality.**  The field is a flat
+  1 right across the umbra, so the argmax is an arbitrary point inside it —
+  the same flatness that makes the time of maximum undefined on the central
+  line.  Documented rather than faked.
+
+A fourth, checked and dropped: comparing an instantaneous contour against
+`coverage_region` was in the plan, but that region is the maximum over the
+whole eclipse, so there is no instant at which the two should agree.
 
 ### Phase 2 — `examples/animate_shadow.py`  [ ]
 - [ ] Frames from first to last contact, umbra + penumbra + coverage contours + terminator
