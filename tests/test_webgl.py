@@ -321,25 +321,29 @@ def test_the_panel_gets_out_of_the_way_on_a_phone():
         page.goto('file://' + page_path)
         page.wait_for_timeout(600)
 
-        shut = page.locator('#panel').bounding_box()
-        assert page.locator('#panel').evaluate(
-            "e => e.classList.contains('shut')"), 'panel did not start folded'
+        shut = page.locator('#info').bounding_box()
+        assert page.locator('#info').evaluate(
+            "e => e.classList.contains('shut')"), 'info card did not start folded'
         assert shut['width'] * shut['height'] < 0.08 * area, shut
-        assert page.locator('#toggle').inner_text() == 'Controls'
-        # Folded is not hidden: the clock still reads.
+        assert page.locator('#infoToggle').inner_text() == 'Info'
+        # Folding the card away must not take the transport with it: the clock
+        # and the timeline are the controls there is no other way to reach.
+        assert page.locator('#transport').is_visible()
         assert ':' in page.locator('#clock').inner_text()
+        bar = page.locator('#transport').bounding_box()
+        assert bar['height'] < 0.16 * screen['height'], bar
 
-        page.click('#toggle')
+        page.click('#infoToggle')
         page.wait_for_timeout(200)
-        opened = page.locator('#panel').bounding_box()
+        opened = page.locator('#info').bounding_box()
         assert opened['height'] > 3 * shut['height'], (shut, opened)
-        assert page.locator('#toggle').inner_text() == 'Hide'
+        assert page.locator('#infoToggle').inner_text() == 'Hide'
         assert page.locator('#showPath').is_visible()
 
-        page.click('#toggle')
+        page.click('#infoToggle')
         page.wait_for_timeout(200)
-        assert page.locator('#panel').evaluate(
-            "e => e.classList.contains('shut')"), 'panel would not fold again'
+        assert page.locator('#info').evaluate(
+            "e => e.classList.contains('shut')"), 'info card would not fold again'
 
         # Two fingers spreading apart must bring the globe closer.  A phone has
         # no wheel, so without this there is no way to zoom at all.
@@ -359,6 +363,54 @@ def test_the_panel_gets_out_of_the_way_on_a_phone():
     assert not problems, problems
     # The gap doubled, so the camera should have come half the distance in.
     assert abs(after - before / 2.0) < 0.05 * before, (before, after)
+
+
+def test_the_timeline_marks_the_central_phase_where_it_happens():
+    """The gold rail is the stretch when the umbra is on the ground.
+
+    Read back off the rendered element rather than recomputed, so a mistake in
+    the arithmetic that places it shows up rather than being repeated.  The
+    partial is the case that matters: it has no central phase at all, and a
+    rail drawn anywhere would be a claim about a shadow that never lands.
+    """
+    if not available():
+        return skip('no playwright or chromium')
+    eclipse, built, _page = prepared()
+    got, problems, _requests, _shot = in_browser(
+        '''() => {
+            const t = SCENE.time, rail = document.getElementById('band');
+            return {left: rail.style.left, width: rail.style.width,
+                    shown: getComputedStyle(rail).display !== 'none',
+                    mark: document.getElementById('mark').style.left};
+        }''')
+    assert not problems, problems
+    span = eclipse.tt_last_contact - eclipse.tt_first_contact
+    want_left = 100.0 * (eclipse.tt_central_start - eclipse.tt_first_contact) / span
+    want_width = 100.0 * (eclipse.tt_central_end
+                          - eclipse.tt_central_start) / span
+    assert got['shown'], got
+    assert abs(float(got['left'].rstrip('%')) - want_left) < 0.01, (got, want_left)
+    assert abs(float(got['width'].rstrip('%')) - want_width) < 0.01, (got,
+                                                                     want_width)
+    # And the mark sits at greatest eclipse, which for this one is the middle.
+    assert '49.99' in got['mark'] or '50.0' in got['mark'], got
+
+    partial = os.path.join(os.path.dirname(HERE), 'docs', 'globes',
+                           'eclipse_20290114.html')
+    if not os.path.exists(partial):
+        return
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as play:
+        browser = play.chromium.launch(executable_path=CHROMIUM)
+        page = browser.new_page(viewport={'width': 900, 'height': 640})
+        page.goto('file://' + os.path.abspath(partial))
+        page.wait_for_timeout(600)
+        shown = page.evaluate(
+            "getComputedStyle(document.getElementById('band')).display")
+        kind = page.evaluate('SCENE.eclipse.kind')
+        browser.close()
+    assert kind == 'P', kind
+    assert shown == 'none', shown
 
 
 def test_every_published_globe_loads_clean():

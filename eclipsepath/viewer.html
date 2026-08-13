@@ -7,83 +7,159 @@
 <style>
   :root {
     --surface: #101319; --panel: #171b23; --ink: #f2f3f5; --ink-2: #9aa1ad;
-    --line: #262b36; --accent: #7fb2f0; --gold: #d4a017;
+    --line: #39404e; --accent: #7fb2f0; --gold: #d4a017;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--surface);
                color: var(--ink); font: 14px/1.45 system-ui, sans-serif; }
   #stage { position: fixed; inset: 0; }
   canvas { display: block; width: 100%; height: 100%; touch-action: none; }
-  #panel { position: fixed; left: 16px; top: 16px; width: 310px; max-width: calc(100vw - 32px);
-           background: color-mix(in srgb, var(--panel) 92%, transparent);
-           border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px;
-           backdrop-filter: blur(6px); }
-  /* Collapsed, the panel is a clock and a way back. On a phone the open panel
-     covers most of the globe, and a control you cannot put away is worse than
-     one you have to fetch. */
-  #panel.shut { width: auto; padding: 9px 12px; }
-  #panel.shut .foldable { display: none; }
-  #panel.shut .clock { margin: 0 78px 0 0; font-size: 17px; }
-  #toggle { position: absolute; top: 10px; right: 10px; padding: 3px 10px;
-            font-size: 12px; }
-  h1 { font-size: 16px; margin: 0 0 2px; font-weight: 600; padding-right: 58px; }
+
+  /* Both controls float over the globe rather than beside it, so the thing
+     being described is never boxed into a corner of its own screen. */
+  .glass {
+    background: color-mix(in srgb, var(--panel) 58%, transparent);
+    border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+    border-radius: 12px;
+    -webkit-backdrop-filter: blur(18px) saturate(150%);
+    backdrop-filter: blur(18px) saturate(150%);
+    box-shadow: 0 10px 34px rgba(0, 0, 0, 0.38);
+  }
+  /* Without the blur the same translucency is just a smear over the coastlines,
+     so where it is unavailable the glass goes nearly solid instead. */
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .glass { background: color-mix(in srgb, var(--panel) 95%, transparent); }
+  }
+
+  #info { position: fixed; left: 16px; top: 16px; width: 322px;
+          max-width: calc(100vw - 32px); padding: 14px 16px; }
+  #info.shut { width: auto; padding: 6px; }
+  #info.shut #infoBody { display: none; }
+  #infoToggle { position: absolute; top: 10px; right: 10px; }
+  #info.shut #infoToggle { position: static; }
+  h1 { font-size: 15px; margin: 0 0 3px; font-weight: 600; padding-right: 52px; }
   .sub { color: var(--ink-2); font-size: 12px; margin: 0 0 12px; }
-  .clock { font: 600 20px/1.2 ui-monospace, monospace; margin: 8px 0 2px; }
-  .reads { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px;
-           font-size: 12px; color: var(--ink-2); margin: 10px 0 4px; }
-  .reads b { color: var(--ink); font-weight: 500; font-variant-numeric: tabular-nums; }
-  input[type=range] { width: 100%; accent-color: var(--accent); }
-  .row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
-  button { background: #222836; color: var(--ink); border: 1px solid var(--line);
-           border-radius: 6px; padding: 5px 11px; font: inherit; cursor: pointer; }
-  button:hover { border-color: var(--accent); }
+  .reads { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px;
+           font-size: 12px; color: var(--ink-2); margin: 0 0 4px; }
+  .reads b { color: var(--ink); font-weight: 500;
+             font-variant-numeric: tabular-nums; }
+  .row { display: flex; gap: 8px; align-items: center; margin-top: 9px;
+         flex-wrap: wrap; }
   label.check { font-size: 12px; color: var(--ink-2); display: flex; gap: 6px;
                 align-items: center; cursor: pointer; }
-  .foot { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line);
+  .foot { margin-top: 12px; padding-top: 10px;
+          border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
           font-size: 11px; color: var(--ink-2); }
-  #error { position: fixed; inset: 0; display: none; place-content: center;
-           padding: 40px; text-align: center; color: var(--ink-2); }
+
+  /* The transport runs the width of the screen because what it controls is
+     time, and time is the one axis the picture does not already show. */
+  #transport { position: fixed; left: 16px; right: 16px; bottom: 16px;
+               padding: 10px 14px; display: flex; align-items: center;
+               gap: 14px; flex-wrap: wrap; }
+  .clock { font: 600 17px/1 ui-monospace, monospace;
+           font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .speed { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+  .speed span { color: var(--ink-2); font-size: 12px; white-space: nowrap;
+                min-width: 8.5ch; text-align: right;
+                font-variant-numeric: tabular-nums; }
+
+  #timeline { position: relative; flex: 1 1 260px; height: 26px;
+              display: flex; align-items: center; }
+  #timeline .track, #timeline .fill, #timeline .band {
+    position: absolute; border-radius: 2px; pointer-events: none; }
+  #timeline .track, #timeline .fill { top: 9px; height: 4px; }
+  #timeline .track { left: 0; right: 0;
+                     background: color-mix(in srgb, var(--ink) 18%, transparent); }
+  #timeline .fill { left: 0; background: var(--accent); opacity: 0.75; }
+  /* Gold here is the gold of the path drawn on the globe: the stretch of the
+     eclipse during which the umbra is somewhere on the ground.  On its own rail
+     below the groove, so it annotates the progress rather than covering it. */
+  #timeline .band { top: 20px; height: 3px; background: var(--gold);
+                    opacity: 0.9; }
+  #timeline .mark { position: absolute; top: 4px; width: 2px; height: 14px;
+                    background: var(--ink); opacity: 0.45; pointer-events: none;
+                    border-radius: 1px; }
+  #scrub { position: relative; width: 100%; margin: 0; background: transparent;
+           -webkit-appearance: none; appearance: none; height: 22px; }
+  #scrub::-webkit-slider-runnable-track { height: 22px; background: transparent; }
+  #scrub::-webkit-slider-thumb { -webkit-appearance: none; width: 15px;
+      height: 15px; border-radius: 50%; background: var(--ink);
+      border: 3px solid var(--accent); margin-top: 3.5px; cursor: pointer; }
+  #scrub::-moz-range-track { height: 22px; background: transparent; }
+  #scrub::-moz-range-thumb { width: 15px; height: 15px; border-radius: 50%;
+      background: var(--ink); border: 3px solid var(--accent); cursor: pointer; }
+
+  button { background: color-mix(in srgb, var(--ink) 10%, transparent);
+           color: var(--ink);
+           border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+           border-radius: 7px; padding: 5px 12px; font: inherit; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
   button:focus-visible, input:focus-visible {
     outline: 2px solid var(--accent); outline-offset: 2px; }
+  #play { min-width: 74px; }
+  input[type=checkbox] { accent-color: var(--accent); }
+
+  #error { position: fixed; inset: 0; display: none; place-content: center;
+           padding: 40px; text-align: center; color: var(--ink-2); }
+
   @media (max-width: 720px) {
-    #panel { left: 12px; top: 12px; right: 12px; width: auto; }
-    #panel.shut { right: auto; }
+    #info { left: 12px; top: 12px; }
+    #transport { left: 10px; right: 10px; bottom: 10px; gap: 10px; padding: 9px 12px; }
+    .clock { font-size: 15px; }
+    /* The rate label reserves room for its widest reading so the buttons stop
+       shuffling; on a phone that reservation is what pushes the row over the
+       edge and costs a whole third line. */
+    .speed { margin-left: auto; }
+    .speed span { min-width: 0; }
+    #timeline { flex-basis: 100%; order: -1; }
   }
 </style>
 </head>
 <body>
 <div id="stage"><canvas id="gl"></canvas></div>
 <div id="error"></div>
-<div id="panel">
-  <button id="toggle" type="button" aria-controls="panel" aria-expanded="true">Hide</button>
-  <h1 id="title" class="foldable">Eclipse</h1>
-  <p class="sub foldable" id="standfirst"></p>
-  <div class="clock" id="clock">--:--:--</div>
-  <input class="foldable" type="range" id="scrub" min="0" max="1000" value="0" step="1">
-  <div class="row foldable">
-    <button id="play">Play</button>
-    <button id="slower">&minus;</button>
-    <button id="faster">+</button>
-    <span id="rate" style="color:var(--ink-2);font-size:12px"></span>
+<div id="info" class="glass">
+  <button id="infoToggle" type="button" aria-controls="infoBody" aria-expanded="true">Hide</button>
+  <div id="infoBody">
+    <h1 id="title">Eclipse</h1>
+    <p class="sub" id="standfirst"></p>
+    <div class="reads">
+      <span>Deepest now</span><b id="peak">&mdash;</b>
+      <span>Umbra at</span><b id="where">&mdash;</b>
+      <span>Sun altitude</span><b id="alt">&mdash;</b>
+    </div>
+    <div class="row">
+      <label class="check"><input type="checkbox" id="showPath" checked> Path</label>
+      <label class="check"><input type="checkbox" id="showCoast" checked> Coast</label>
+      <label class="check"><input type="checkbox" id="follow"> Follow</label>
+      <label class="check"><input type="checkbox" id="showCone"> Cone</label>
+    </div>
+    <div class="row">
+      <button id="wide">Show the Moon</button>
+    </div>
+    <div class="foot" id="foot"></div>
   </div>
-  <div class="reads foldable">
-    <span>Deepest now</span><b id="peak">&mdash;</b>
-    <span>Umbra at</span><b id="where">&mdash;</b>
-    <span>Sun altitude</span><b id="alt">&mdash;</b>
-  </div>
-  <div class="row foldable">
-    <label class="check"><input type="checkbox" id="showPath" checked> Path</label>
-    <label class="check"><input type="checkbox" id="showCoast" checked> Coast</label>
-    <label class="check"><input type="checkbox" id="follow"> Follow</label>
-  </div>
-  <div class="row foldable">
-    <button id="wide">Show the Moon</button>
-    <label class="check"><input type="checkbox" id="showCone"> Cone</label>
-  </div>
-  <div class="foot foldable" id="foot"></div>
 </div>
 
-<script id="scene" type="application/json">/*SCENE*/null/*SCENE*/</script>
+<div id="transport" class="glass">
+  <button id="play">Play</button>
+  <div id="timeline">
+    <div class="track"></div>
+    <div class="fill" id="fill"></div>
+    <div class="band" id="band"></div>
+    <div class="mark" id="mark"></div>
+    <input type="range" id="scrub" min="0" max="1000" value="0" step="1"
+           aria-label="Time through the eclipse">
+  </div>
+  <div class="clock" id="clock">--:--:--</div>
+  <div class="speed">
+    <button id="slower" aria-label="Slower">&minus;</button>
+    <span id="rate"></span>
+    <button id="faster" aria-label="Faster">+</button>
+  </div>
+</div>
+
+<script id="scene"<script id="scene" type="application/json">/*SCENE*/null/*SCENE*/</script>
 <script>
 'use strict';
 
@@ -670,14 +746,30 @@ el('foot').innerHTML = 'Shadow computed per pixel from JPL DE440s positions, ' +
   'really has; its track is drawn in the same Earth-fixed frame as the globe, ' +
   'which means most of that curve is the Earth turning.';
 
-el('toggle').addEventListener('click', () => {
-  const shut = el('panel').classList.toggle('shut');
-  el('toggle').textContent = shut ? 'Controls' : 'Hide';
-  el('toggle').setAttribute('aria-expanded', String(!shut));
+el('infoToggle').addEventListener('click', () => {
+  const shut = el('info').classList.toggle('shut');
+  el('infoToggle').textContent = shut ? 'Info' : 'Hide';
+  el('infoToggle').setAttribute('aria-expanded', String(!shut));
 });
-// Start out of the way on a small screen, where the open panel would cover the
-// thing it is describing.
-if (window.innerWidth < 720) el('toggle').click();
+// Start out of the way on a small screen, where the open card would cover the
+// thing it is describing.  The transport stays: it is the one control there is
+// no other way to reach, and it takes a strip along the bottom either way.
+if (window.innerWidth < 720) el('infoToggle').click();
+
+// The timeline's fixed marks, set once.  The gold band is the stretch during
+// which the umbra is somewhere on the ground -- absent for a partial, which
+// never has one, and then the band is simply not drawn.
+(function markTimeline() {
+  const place = value => (100.0 * (value - T0) / (T1 - T0)) + '%';
+  el('mark').style.left = 'calc(' + place(SCENE.time.greatest_tt) + ' - 1px)';
+  const from = SCENE.time.central_start_tt, to = SCENE.time.central_end_tt;
+  if (from === null || to === null || from === undefined) {
+    el('band').style.display = 'none';
+    return;
+  }
+  el('band').style.left = place(from);
+  el('band').style.width = (100.0 * (to - from) / (T1 - T0)) + '%';
+})();
 
 el('scrub').addEventListener('input', () => {
   tt = T0 + (T1 - T0) * el('scrub').value / 1000.0;
@@ -712,7 +804,7 @@ el('wide').addEventListener('click', () => {
 });
 el('faster').addEventListener('click', () => { rate = Math.min(3840, rate * 2); showRate(); });
 el('slower').addEventListener('click', () => { rate = Math.max(15, rate / 2); showRate(); });
-function showRate() { el('rate').textContent = rate + '× real time'; }
+function showRate() { el('rate').textContent = rate + '×'; }
 showRate();
 
 // ------------------------------------------------------------------ draw ----
@@ -802,7 +894,9 @@ function render(mode) {
 
 function readouts(state) {
   el('clock').textContent = clockText(tt) + ' UTC';
-  el('scrub').value = Math.round(1000 * (tt - T0) / (T1 - T0));
+  const through = (tt - T0) / (T1 - T0);
+  el('scrub').value = Math.round(1000 * through);
+  el('fill').style.width = (100.0 * Math.min(1, Math.max(0, through))) + '%';
   const axis = axisPoint(state);
   if (axis) {
     const seen = circumstancesAt(axis.latitude, axis.longitude, tt);

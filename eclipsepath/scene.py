@@ -140,6 +140,14 @@ def build(eclipse, timescale, coastlines=None,
             'first_contact_tt': eclipse.tt_first_contact,
             'last_contact_tt': eclipse.tt_last_contact,
             'greatest_tt': eclipse.tt_greatest,
+            # When the umbra is somewhere on the ground, for the band the
+            # timeline draws.  NaN for a partial, which never has one.
+            'central_start_tt': (None if eclipse.tt_central_start
+                                 != eclipse.tt_central_start
+                                 else eclipse.tt_central_start),
+            'central_end_tt': (None if eclipse.tt_central_end
+                               != eclipse.tt_central_end
+                               else eclipse.tt_central_end),
             # A stamp for the first sample plus the step is all the viewer
             # needs to label a clock; it never has to know about leap seconds
             # because every instant it is asked about lies inside this window.
