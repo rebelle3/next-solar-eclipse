@@ -520,7 +520,7 @@ named constants at the top of each plotting script and are trivial to swap.
 python3 tests/test_eclipsepath.py        # 46 tests, also runs under pytest
 python3 tests/test_shadow.py             # 17 tests: the instantaneous footprint
 python3 tests/test_animation.py          # 8 tests: the animated map
-python3 tests/test_webgl.py              # 12 tests: the globe, in a real browser
+python3 tests/test_webgl.py              # 13 tests: the globe, in a real browser
 python3 tests/verify_against_nasa.py     # row-by-row against NASA path tables
 python3 tests/verify_usno.py             # local circumstances vs the USNO
 python3 tests/verify_besselian.py        # local circumstances vs NASA elements

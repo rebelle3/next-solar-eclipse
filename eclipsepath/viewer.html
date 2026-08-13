@@ -393,13 +393,23 @@ void main() {
   // Coverage darkens the ground steeply near totality, as the eye reports it:
   // half the Sun gone is barely a dimming.
   float shade = pow(covered, 2.2);
-  base *= (1.0 - 0.93 * shade);
-  // A little warmth low in the sky, and the deep blue of a total eclipse.
+  // The three channels go out at different rates -- red first, blue last --
+  // which is why totality reads as blue twilight and not as grey.  It is a
+  // darkening and not a wash of colour laid over the top: every channel only
+  // ever falls as more of the Sun is covered, so the umbra is the darkest
+  // place on the globe, which is the one thing this picture must not get
+  // backwards.
+  base *= (1.0 - vec3(0.960, 0.938, 0.858) * shade);
+  // A little warmth low in the sky, fading as the Sun that provides it is
+  // covered over.
   base = mix(base, vec3(0.22, 0.13, 0.07),
-             0.35 * lit * (1.0 - smoothstep(0.0, 14.0, altitude)));
-  base = mix(base, vec3(0.02, 0.03, 0.09), 0.75 * smoothstep(0.97, 1.0, covered));
-  float rim = pow(1.0 - abs(dot(normalize(vNormal), normalize(-vPos))), 3.0);
-  fragColor = vec4(base + vec3(0.05, 0.10, 0.18) * rim * 0.0, 1.0);
+             0.35 * lit * (1.0 - smoothstep(0.0, 14.0, altitude))
+             * (1.0 - shade));
+  if (uMode == 2) {            // hand the colour back for the tests to read
+    fragColor = vec4(base, 1.0);
+    return;
+  }
+  fragColor = vec4(base, 1.0);
 }`;
 
 const GLOBE_VS = `#version 300 es
@@ -1199,7 +1209,7 @@ requestAnimationFrame(frame);
 // A hook for the test harness: render one pixel's worth of the shader's own
 // arithmetic into a float target and hand the number back, so the shader can
 // be held to the package rather than to a screenshot.
-window.eclipseShaderProbe = function (latitude, longitude, atTt) {
+window.eclipseShaderProbe = function (latitude, longitude, atTt, mode) {
   const previous = tt;
   tt = atTt;
   const target = gl.createFramebuffer();
@@ -1219,7 +1229,7 @@ window.eclipseShaderProbe = function (latitude, longitude, atTt) {
                     'EXT_color_buffer_float ' +
                     (FLOAT_TARGETS ? 'present' : 'missing') + ')');
   }
-  const out = probeAt(latitude, longitude);
+  const out = probeAt(latitude, longitude, mode || 1);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.deleteFramebuffer(target);
   gl.deleteTexture(texture);
@@ -1252,7 +1262,7 @@ gl.enableVertexAttribArray(0);
 gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
 gl.bindVertexArray(null);
 
-function probeAt(latitude, longitude) {
+function probeAt(latitude, longitude, mode) {
   const p = geodeticToItrf(latitude, longitude);
   const state = stateAt(tt);
   gl.viewport(0, 0, 1, 1);
@@ -1264,13 +1274,16 @@ function probeAt(latitude, longitude) {
   gl.uniform1f(probeUniforms.uRMoon, C.r_moon_km);
   gl.uniform1f(probeUniforms.uE2, E2);
   gl.uniform1f(probeUniforms.uHorizon, C.horizon_altitude_deg);
-  gl.uniform1i(probeUniforms.uMode, 1);
+  gl.uniform1i(probeUniforms.uMode, mode);
   gl.bindVertexArray(probeVao);
   gl.bindBuffer(gl.ARRAY_BUFFER, probeBuffer);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(p), gl.STATIC_DRAW);
   gl.drawArrays(gl.POINTS, 0, 1);
   const pixel = new Float32Array(4);
   gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.FLOAT, pixel);
+  if (mode === 2)
+    return {red: pixel[0], green: pixel[1], blue: pixel[2],
+            luma: 0.2126 * pixel[0] + 0.7152 * pixel[1] + 0.0722 * pixel[2]};
   return {obscuration: pixel[0],
           sun_altitude: (pixel[1] - 0.5) * 180.0,
           separation: pixel[2]};

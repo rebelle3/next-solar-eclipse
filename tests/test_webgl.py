@@ -240,6 +240,58 @@ def test_the_shader_agrees_with_the_package():
     assert worst_altitude < 1e-2, worst_altitude
 
 
+def test_more_of_the_sun_covered_never_means_a_brighter_globe():
+    """Brightness must fall all the way into the umbra, in every channel.
+
+    This is the test that was missing.  The shader used to lay a fixed navy
+    over anything above 97 per cent covered, meant as the blue twilight of
+    totality; because it was mixed in after the darkening it lifted the value
+    instead of deepening it, so the umbra came out brighter and twice as blue
+    as the 96 per cent ring around it, with a visible step at the threshold.
+    The darkest place on Earth was rendering as the brightest part of the
+    shadow, and every check in this file passed while it did, because they all
+    ask about numbers and none of them asked about the picture.
+
+    The sites are kept where the Sun is high so that only coverage varies: the
+    warmth applied low in the sky is a second thing changing the colour, and a
+    test that let both move could not say which one had gone wrong.
+    """
+    if not available():
+        return skip('no playwright or chromium')
+    eclipse, _built, _page = prepared()
+    # Wide enough to run from clear sky into the umbra: four degrees either
+    # side stays above 89 per cent throughout, the penumbra being some three
+    # thousand kilometres across.
+    latitudes = np.linspace(eclipse.latitude - 26.0, eclipse.latitude + 26.0, 61)
+    sites = [(float(lat), eclipse.longitude) for lat in latitudes]
+    got, problems, _requests, _shot = in_browser(
+        '''([sites, tt]) => sites.map(s => ({
+            state: window.eclipseShaderProbe(s[0], s[1], tt, 1),
+            colour: window.eclipseShaderProbe(s[0], s[1], tt, 2),
+        }))''', [sites, eclipse.tt_greatest])
+    assert not problems, problems
+
+    altitudes = [row['state']['sun_altitude'] for row in got]
+    # Above 14 degrees the warmth low in the sky is switched off entirely, so
+    # coverage is the only thing colouring these.
+    assert min(altitudes) > 20.0, min(altitudes)
+    rows = sorted(((row['state']['obscuration'], row['colour'])
+                   for row in got), key=lambda r: r[0])
+    assert rows[0][0] < 0.5 and rows[-1][0] > 0.999, (rows[0][0], rows[-1][0])
+
+    for channel in ('luma', 'red', 'green', 'blue'):
+        for (lower, dim), (higher, bright) in zip(rows, rows[1:]):
+            assert bright[channel] <= dim[channel] + 1e-6, (
+                channel, lower, dim[channel], higher, bright[channel])
+    # And the deepest point is strictly the darkest, not merely tied.
+    assert rows[-1][1]['luma'] < 0.75 * rows[0][1]['luma'], (rows[0][1],
+                                                             rows[-1][1])
+    # Still blue: the shadow deepens unevenly, which is the whole point of
+    # doing it per channel rather than with one multiplier.
+    deepest = rows[-1][1]
+    assert deepest['blue'] > 3.0 * deepest['red'], deepest
+
+
 def test_the_shader_finds_the_edge_of_totality_where_the_package_does():
     """Walk across the umbra's edge and compare where each says it is.
 
