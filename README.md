@@ -82,6 +82,21 @@ contour: past it the Sun has set and coverage drops straight to nothing. Ask
 for a coverage threshold on a central eclipse and you get both — the path of
 totality or annularity, and the wider region meeting your threshold.
 
+### Tracing a single threshold
+
+`analyse` describes one threshold and picks its own representation.
+`coverage_region` traces any threshold as a closed outline regardless, which is
+what nesting several of them on a map needs:
+
+```python
+from eclipsepath import search, coverage_region
+
+eclipse = search('2027-01-01', years=1)[0]
+for threshold in (0.8, 0.6, 0.4, 0.2):
+    region = coverage_region(eclipse, threshold, rays=540)
+    print(threshold, [(p.latitude, p.longitude) for p in region.points])
+```
+
 As a library:
 
 ```python
@@ -108,6 +123,16 @@ python3 examples/plot_path.py eclipse.json ne_110m_admin_0_countries.geojson
 ```
 
 ![Path of totality for the total solar eclipse of 2 August 2027](examples/eclipse_2027_path.png)
+
+`examples/plot_coverage.py` draws the same eclipse as nested coverage bands,
+using `coverage_region` to trace an outline at each threshold:
+
+```
+python3 examples/contours.py            # writes contours.json
+python3 examples/plot_coverage.py contours.json ne_110m_admin_0_countries.geojson
+```
+
+![Coverage bands for the total solar eclipse of 2 August 2027](examples/eclipse_2027_coverage.png)
 
 ### GeoJSON
 

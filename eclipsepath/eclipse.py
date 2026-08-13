@@ -27,6 +27,8 @@ from .ephemeris import EclipseWindow
 from .finder import RawEvent, axis_metrics
 
 WINDOW_PAD_DAYS = 6.0 / 1440.0
+REGION_RAYS = 180
+REGION_LIMIT_KM = 16000.0
 SEARCH_LIMIT_KM = 12000.0
 NEW_MOON_EPOCH_TT = 2451550.09766   # 2000 Jan 6 new moon, TT Julian day
 SYNODIC_MONTH = 29.530588861
@@ -184,7 +186,7 @@ def umbra_sign(window, tt, itrf_point):
 
 
 def analyse(ephem, event: RawEvent, threshold=1.0, samples=120,
-            time_samples=601, trace_limits=True):
+            time_samples=601, trace_limits=True, region_rays=REGION_RAYS):
     """Turn a bracketed event into a fully described :class:`Eclipse`."""
     window = EclipseWindow(ephem,
                            event.tt_first_contact - WINDOW_PAD_DAYS,
@@ -224,8 +226,26 @@ def analyse(ephem, event: RawEvent, threshold=1.0, samples=120,
     )
 
     if trace_limits:
-        _build_path(eclipse, window, grid, threshold, samples)
+        _build_path(eclipse, window, grid, threshold, samples, region_rays)
     return eclipse
+
+
+def coverage_region(eclipse, threshold, rays=REGION_RAYS):
+    """Closed outline of where peak coverage reaches ``threshold``.
+
+    :func:`analyse` describes one threshold, and as a band when the area is
+    strip-shaped.  This traces any threshold as an outline regardless, which is
+    what nesting several of them on a map needs.  Returns ``None`` if the
+    eclipse never gets that deep anywhere.
+    """
+    if eclipse.window is None:
+        raise ValueError('eclipse was computed without retaining its window')
+    if eclipse.peak_obscuration < threshold - 1e-12:
+        return None
+    coarse = np.linspace(eclipse.tt_first_contact, eclipse.tt_last_contact,
+                         PREDICATE_TIME_SAMPLES)
+    return _trace_region(eclipse.window, coarse, eclipse.tt_greatest, threshold,
+                         '%g%% obscuration' % (threshold * 100), rays=rays)
 
 
 def _classify(window, grid):
@@ -339,7 +359,7 @@ def umbral_contacts(window, tt_lo, tt_hi, steps=1200):
     return float(start), float(end)
 
 
-def _build_path(eclipse, window, grid, threshold, samples):
+def _build_path(eclipse, window, grid, threshold, samples, region_rays):
     tt = np.linspace(eclipse.tt_first_contact, eclipse.tt_last_contact, samples)
     point, hit = _track(window, tt)
     lat, lon, _ = g.itrf_to_geodetic(point)
@@ -386,7 +406,8 @@ def _build_path(eclipse, window, grid, threshold, samples):
                                                     depth, label)
             else:
                 eclipse.coverage_region = _trace_region(
-                    window, coarse, eclipse.tt_greatest, threshold, label)
+                    window, coarse, eclipse.tt_greatest, threshold, label,
+                    rays=region_rays)
 
     _fill_greatest_metrics(eclipse, window, coarse)
 
@@ -467,8 +488,6 @@ def _cross_section_is_transverse(lat, lon, north_lat, north_lon,
     return smaller >= BALANCE_LIMIT * np.maximum(larger, 1e-9)
 
 
-REGION_RAYS = 180
-REGION_LIMIT_KM = 16000.0
 STRIP_FRACTION = 0.7
 STRIP_PROBE_SAMPLES = 41
 
