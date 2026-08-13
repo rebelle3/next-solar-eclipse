@@ -7,7 +7,7 @@ E = analyse(e, ev, threshold=1.0, samples=400)
 
 out = {'eclipse': output.eclipse_detail(E, ts), 'contours': []}
 for th in (0.01, 0.20, 0.40, 0.60, 0.80):
-    r = coverage_region(E, th, rays=540)
+    r = coverage_region(E, th, rays=180)
     out['contours'].append({
         'threshold': th,
         'centre': [r.centre_latitude, r.centre_longitude],
