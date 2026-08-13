@@ -31,11 +31,31 @@ def observe(window, tt, itrf_xyz):
     v_sun = sun - site
     v_moon = moon - site
     r_sun = g.angular_radius(g.norm(v_sun), g.R_SUN_KM)
-    r_moon = g.angular_radius(g.norm(v_moon), g.R_MOON_KM)
+    r_moon = g.angular_radius(g.norm(v_moon), _lunar_radius(v_sun, v_moon))
     sep = g.separation(v_sun, v_moon)
     up = g.rotate_to_icrf(rot, g.unit(_zenith_of(itrf_xyz)))
     alt = 90.0 - np.degrees(g.separation(v_sun, up))
     return r_sun, r_moon, sep, alt
+
+
+def _lunar_radius(v_sun, v_moon):
+    """The Moon's radius toward the Sun, from a limb profile if one is set.
+
+    What decides whether the Sun is covered is the height of the lunar horizon
+    on the side the Sun is peeping out from, so the profile is sampled at the
+    position angle of the Sun as seen from the Moon's centre.  With no profile
+    set this is just the constant radius and the Moon stays a circle.
+    """
+    if g.LIMB_PROFILE is None:
+        return g.R_MOON_KM
+    line_of_sight = g.unit(v_moon)
+    pole = np.zeros_like(line_of_sight)
+    pole[2] = 1.0
+    north = g.unit(pole - line_of_sight * g.dot(pole, line_of_sight))
+    east = np.cross(line_of_sight, north, axis=0)
+    offset = g.unit(v_sun) - line_of_sight
+    angle = np.degrees(np.arctan2(g.dot(offset, east), g.dot(offset, north)))
+    return g.LIMB_PROFILE.radius_at(angle)
 
 
 def _zenith_of(itrf_xyz):

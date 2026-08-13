@@ -524,6 +524,114 @@ def test_night_side_sees_nothing():
     assert circumstances_at(result, -33.87, 151.21) is None      # Sydney
 
 
+# --- lunar limb --------------------------------------------------------------
+
+def _limb_available():
+    try:
+        from eclipsepath import limb
+        limb.load()
+        return True
+    except Exception:                                  # noqa: BLE001
+        return False
+
+
+def test_limb_is_off_by_default():
+    assert g.LIMB_PROFILE is None, 'a limb profile leaked between tests'
+
+
+def test_limb_profile_reproduces_the_empirical_lunar_radius():
+    """The measured limb should average to the constant catalogues adopt.
+
+    Espenak adopts k = 0.272281 for umbral contacts on empirical grounds, from
+    limb charts and observed contact timings.  Averaging a real limb profile
+    from laser altimetry over several eclipses should land on the same figure
+    if the libration, limb geometry and elevation lookup are all right.
+    """
+    if not _limb_available():
+        print('   (skipped: lunar elevation model not downloaded)')
+        return
+    from eclipsepath import limb
+    ephem = ephemeris()
+    ts = ephem.timescale
+    means = []
+    for year, month, day in ((2027, 8, 2), (2028, 7, 22), (2030, 11, 25),
+                             (2034, 3, 20)):
+        event = finder.find_events(ephem, ts.utc(year, month, day - 1).tt,
+                                   ts.utc(year, month, day + 1).tt)[0]
+        profile = limb.profile_for(ephem, event.tt_greatest)
+        summary = profile.summary()
+        # The limb runs from deep basins to high peaks; a few km either way.
+        assert 5.0 < summary['range_km'] < 20.0, summary
+        assert summary['min_km'] > 1725.0 and summary['max_km'] < 1750.0
+        means.append(summary['mean_km'])
+    average = sum(means) / len(means)
+    espenak = 0.2722810 * g.EARTH_A_KM
+    assert abs(average - espenak) < 0.25, (average, espenak)
+    assert max(means) - min(means) < 0.5, means
+
+
+def test_limb_is_sampled_where_the_sun_escapes():
+    """The two path limits must sample opposite sides of the lunar limb.
+
+    At the northern limit the last of the Sun goes behind one side of the Moon
+    and at the southern limit behind the other, so the position angles have to
+    be half a turn apart.  Getting this backwards would still shift the limits
+    by a plausible amount, just the wrong way, so it is worth pinning.
+    """
+    if not _limb_available():
+        print('   (skipped: lunar elevation model not downloaded)')
+        return
+    ephem = ephemeris()
+    ts = ephem.timescale
+    event = finder.find_events(ephem, ts.utc(2027, 7, 15).tt,
+                               ts.utc(2027, 8, 15).tt)[0]
+    result = ec.analyse(ephem, event, threshold=1.0, samples=60)
+    middle = result.central_band.points[len(result.central_band.points) // 2]
+
+    class Recorder:
+        def __init__(self):
+            self.angles = []
+
+        def radius_at(self, angle):
+            self.angles.append(float(np.atleast_1d(angle).ravel()[0]))
+            return np.full_like(np.asarray(angle, float), g.R_MOON_KM)
+
+    seen = {}
+    for name, lat, lon in (('north', middle.north_latitude, middle.north_longitude),
+                           ('south', middle.south_latitude, middle.south_longitude)):
+        recorder = Recorder()
+        g.set_limb_profile(recorder)
+        try:
+            cc.state_at(result.window, g.geodetic_to_itrf(lat, lon),
+                        np.array([middle.tt]))
+        finally:
+            g.set_limb_profile(None)
+        seen[name] = recorder.angles[0]
+    apart = abs(((seen['north'] - seen['south'] + 180.0) % 360.0) - 180.0)
+    assert apart > 175.0, seen
+
+
+def test_limb_shifts_the_path_by_a_kilometre_or_two():
+    if not _limb_available():
+        print('   (skipped: lunar elevation model not downloaded)')
+        return
+    from eclipsepath import limb
+    ephem = ephemeris()
+    ts = ephem.timescale
+    event = finder.find_events(ephem, ts.utc(2027, 7, 15).tt,
+                               ts.utc(2027, 8, 15).tt)[0]
+    plain = ec.analyse(ephem, event, threshold=1.0, samples=3)
+    g.set_limb_profile(limb.profile_for(ephem, event.tt_greatest))
+    try:
+        ragged = ec.analyse(ephem, event, threshold=1.0, samples=3)
+    finally:
+        g.set_limb_profile(None)
+    # Limb relief is a couple of km on a path a few hundred km wide.
+    assert 0.1 < abs(ragged.path_width_km - plain.path_width_km) < 12.0
+    assert abs(ragged.central_duration_seconds
+               - plain.central_duration_seconds) < 6.0
+
+
 # --- output -----------------------------------------------------------------
 
 def test_split_runs_cuts_at_the_antimeridian():

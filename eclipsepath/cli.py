@@ -68,6 +68,16 @@ def build_parser():
                             'catalogues (default); "iau" = 0.2725076')
     model.add_argument('--delta-t', type=float, metavar='SECONDS',
                        help='override TT - UT1; shifts paths in longitude')
+    model.add_argument('--refraction', type=float, default=34.0,
+                       metavar='ARCMIN',
+                       help='horizon refraction assumed for visibility '
+                            '(default: 34, the usual value; 0 for the '
+                            'geometric horizon)')
+    model.add_argument('--limb', action='store_true',
+                       help='use the Moon\'s real limb profile from lunar '
+                            'altimetry instead of treating it as a circle; '
+                            'needs the LOLA elevation model and lunar '
+                            'orientation kernels (see eclipsepath.limb)')
     return parser
 
 
@@ -105,6 +115,7 @@ def local_report(eclipses, timescale, site):
 def main(argv=None):
     args = build_parser().parse_args(argv)
     k = g.set_lunar_radius(args.lunar_radius)
+    g.set_refraction(args.refraction)
     threshold = args.coverage / 100.0
     site = parse_location(args.at) if args.at else None
     start = args.start or dt.datetime.now(dt.timezone.utc).date().isoformat()
@@ -121,6 +132,18 @@ def main(argv=None):
 
     def progress(index, total):
         note('  computing path %d/%d' % (index + 1, total))
+
+    if args.limb:
+        # One profile per run: libration turns the Moon by well under a degree
+        # across the span of a single eclipse.
+        from . import limb as limb_module
+        try:
+            note('building lunar limb profile...')
+            g.set_limb_profile(limb_module.profile_for(
+                ephem, ephem.timescale.from_datetime(
+                    catalog.to_datetime(start)).tt))
+        except FileNotFoundError as exc:
+            raise SystemExit(str(exc))
 
     note('scanning for eclipses...')
     try:
@@ -140,6 +163,8 @@ def main(argv=None):
         'coverage_threshold_percent': args.coverage,
         'ephemeris': ephem.path,
         'lunar_radius_k': k,
+        'lunar_limb_profile': bool(args.limb),
+        'refraction_arcmin': args.refraction,
         'solar_radius_km': g.R_SUN_KM,
         'delta_t_seconds': round(ephem.delta_t_at(
             eclipses[0].tt_greatest), 3) if eclipses else None,

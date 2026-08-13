@@ -43,6 +43,18 @@ HORIZON_REFRACTION_DEG = 34.0 / 60.0
 HORIZON_ALTITUDE_DEG = -HORIZON_REFRACTION_DEG
 
 
+# When set, the Moon's radius is looked up per position angle from a real limb
+# profile instead of being a constant.  See :mod:`eclipsepath.limb`.
+LIMB_PROFILE = None
+
+
+def set_limb_profile(profile):
+    """Use a measured lunar limb profile, or ``None`` for a circular Moon."""
+    global LIMB_PROFILE
+    LIMB_PROFILE = profile
+    return profile
+
+
 def set_refraction(arcminutes):
     """Horizon refraction to assume, in arcminutes; 0 for the geometric horizon.
 

@@ -280,6 +280,72 @@ the eclipse this project was written the day of — comes out as 93.24% at
 * **No atmospheric refraction**, so a path's extreme sunrise/sunset ends are
   slightly conservative.
 
+## The Moon's real limb
+
+Everything above treats the Moon as a circle. It is not: the edge that cuts off
+the Sun is a mountainous horizon whose radius varies by several kilometres with
+position angle, and which turns slowly as libration rotates the Moon relative
+to us. That is what the two values of k are averaging over.
+
+`--limb` replaces the constant with a profile measured from lunar laser
+altimetry — for each position angle, where the limb actually is at that moment.
+It needs two extra downloads, both public domain:
+
+```
+# LOLA gridded elevation model (531 MB) from the NASA Planetary Data System
+curl -sO https://pds-geosciences.wustl.edu/lro/lro-l-lola-3-rdr-v1/lrolol_1xxx/data/lola_gdr/cylindrical/img/ldem_64.img
+curl -sO https://pds-geosciences.wustl.edu/lro/lro-l-lola-3-rdr-v1/lrolol_1xxx/data/lola_gdr/cylindrical/img/ldem_64.lbl
+# lunar orientation, for libration, from JPL NAIF
+curl -sO https://naif.jpl.nasa.gov/pub/naif/generic_kernels/fk/satellites/moon_080317.tf
+curl -sO https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/pck00011.tpc
+curl -sO https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/moon_pa_de421_1900-2050.bpc
+```
+
+Put them beside the ephemeris and pass `--limb`. It costs no measurable time —
+the profile is built once per run and sampled by interpolation.
+
+There is a satisfying check available on it. Espenak's k = 0.272281 is an
+*empirical* value, settled on from limb charts and observed contact timings
+rather than derived. Averaging a real altimetry profile around the limb, over
+eleven eclipses, gives 1736.706 ± 0.060 km. His constant is 1736.646 km — the
+two agree to **60 metres**, which is a good sign that the libration, limb
+geometry and elevation lookup are all doing what they should.
+
+The effect on results is what the literature would lead you to expect: for the
+2027 eclipse the path limits move by a few kilometres, because the northern and
+southern limits sample opposite sides of the limb and pick up different terrain,
+while the duration on the centre line barely moves.
+
+## Data sources and licensing
+
+Nothing here is copyleft and nothing requires attribution as a condition of use.
+
+| Input | Source | Licence |
+| --- | --- | --- |
+| Skyfield, jplephem, sgp4 | PyPI | MIT |
+| NumPy | PyPI | BSD-3-Clause |
+| Matplotlib (examples only) | PyPI | PSF, BSD-compatible |
+| certifi (via Skyfield) | PyPI | MPL-2.0 |
+| `de440s.bsp` ephemeris | JPL NAIF | US Government work, public domain |
+| Lunar orientation kernels | JPL NAIF | US Government work, public domain |
+| LOLA elevation model | NASA PDS | US Government work, public domain |
+| Country and land outlines | Natural Earth | Public domain, no attribution required |
+
+No data files are bundled; everything above is fetched on first use. The only
+third-party content committed to this repository is `tests/data/*.json`, a few
+dozen reference values (times, coordinates, widths, durations) transcribed from
+NASA's published eclipse tables for verification. Those are measurements rather
+than creative work, and they are used only by the test suite.
+
+Physical constants in the source — the solar radius, both lunar radius
+conventions, the WGS84 ellipsoid, horizon refraction, the synodic month — are
+published standard values. The saros formula in `eclipse.py` was derived here by
+fitting the catalogue, not taken from a source.
+
+The colours in `examples/` came from a design reference rather than a public
+palette. Individual colours are not copyrightable, but if that matters they are
+named constants at the top of each plotting script and are trivial to swap.
+
 ## Tests
 
 ```
