@@ -34,6 +34,27 @@ EARTH_E2 = EARTH_F * (2.0 - EARTH_F)
 
 R_MOON_KM = K_MOON * EARTH_A_KM  # 1736.6 km
 
+# Refraction lifts the Sun's apparent position near the horizon by about half a
+# degree, so an eclipse stays visible from roughly 60 km further round the globe
+# than geometry alone allows.  This is the geometric altitude of the Sun's
+# centre at which it appears to sit on the horizon; -50' would instead put its
+# upper limb there, the usual definition of sunrise.
+HORIZON_REFRACTION_DEG = 34.0 / 60.0
+HORIZON_ALTITUDE_DEG = -HORIZON_REFRACTION_DEG
+
+
+def set_refraction(arcminutes):
+    """Horizon refraction to assume, in arcminutes; 0 for the geometric horizon.
+
+    Real refraction at the horizon swings with temperature and pressure by
+    several arcminutes, which is tens of kilometres on the ground, so the edge
+    of visibility is soft in reality whatever value is used here.
+    """
+    global HORIZON_REFRACTION_DEG, HORIZON_ALTITUDE_DEG
+    HORIZON_REFRACTION_DEG = float(arcminutes) / 60.0
+    HORIZON_ALTITUDE_DEG = -HORIZON_REFRACTION_DEG
+    return HORIZON_REFRACTION_DEG
+
 
 def set_lunar_radius(policy_or_k):
     """Select the lunar radius by policy name ('espenak', 'iau') or by k."""

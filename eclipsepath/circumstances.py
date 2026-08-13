@@ -101,14 +101,22 @@ def obscuration_depth(threshold):
     return depth
 
 
+MAX_HORIZON_CROSSINGS = 4
+
+
 def peak_eclipse(window, itrf_xyz, tt_grid, depth=None, require_visible=True):
     """Deepest eclipse seen at each of ``P`` sites over the whole event.
 
     ``depth`` scores how deep the eclipse is; the returned state is taken at
     whichever instant maximises it.  The peak is normally at minimum
     separation, but a site that only catches the eclipse around sunrise or
-    sunset peaks exactly when the Sun's centre reaches the horizon, so both
-    candidates are evaluated and the better one wins.
+    sunset peaks exactly as the Sun reaches the horizon, so those instants are
+    candidates too and the best of them all wins.
+
+    Every horizon crossing is evaluated, not just the one nearest the deepest
+    moment.  Picking one by index makes this function jump wherever the choice
+    flips from a site to its neighbour, and a search for the edge of a region
+    then inherits that jump as a wobble of a few kilometres.
     """
     if depth is None:
         depth = obscuration_depth(0.0)
@@ -124,7 +132,8 @@ def peak_eclipse(window, itrf_xyz, tt_grid, depth=None, require_visible=True):
                   'sun_altitude': alt,
                   'obscuration': g.obscuration(r_sun, r_moon, sep),
                   'magnitude': g.magnitude(r_sun, r_moon, sep)}
-    visible = alt >= 0.0 if require_visible else np.ones_like(alt, bool)
+    horizon = g.HORIZON_ALTITUDE_DEG
+    visible = alt >= horizon if require_visible else np.ones_like(alt, bool)
     scores = np.where(visible, depth(grid_state), -np.inf)
 
     best_t = tt_grid[np.argmax(scores, axis=1)]
@@ -137,25 +146,28 @@ def peak_eclipse(window, itrf_xyz, tt_grid, depth=None, require_visible=True):
     t_a = _golden_min(lambda tt: _separation_at(window, col, tt), lo, hi)
     best = _better(best, _evaluate(window, itrf_xyz, t_a, depth, require_visible))
 
-    # Candidate B: the horizon crossing nearest that instant, if there is one.
+    # Candidate B: every crossing of the horizon.
     crossing = visible[:, :-1] != visible[:, 1:]
     if crossing.any():
-        idx = np.arange(n_times - 1)[None, :]
-        cost = np.where(crossing, np.abs(idx - j[:, None]), n_times * 10)
-        k = np.argmin(cost, axis=1)
-        has = crossing[np.arange(n_sites), k]
-        t_b = _bisect(lambda tt: _altitude_at(window, col, tt),
-                      tt_grid[k], tt_grid[k + 1], 40)
-        t_b = np.where(has, t_b, best['t'])
-        best = _better(best, _evaluate(window, itrf_xyz, t_b, depth,
-                                       require_visible, tolerance=1e-9))
+        rank = np.cumsum(crossing, axis=1) - 1
+        for nth in range(MAX_HORIZON_CROSSINGS):
+            this = crossing & (rank == nth)
+            has = this.any(axis=1)
+            if not has.any():
+                break
+            k = np.argmax(this, axis=1)
+            t_b = _bisect(lambda tt: _altitude_at(window, col, tt),
+                          tt_grid[k], tt_grid[k + 1], 40)
+            t_b = np.where(has, t_b, best['t'])
+            best = _better(best, _evaluate(window, itrf_xyz, t_b, depth,
+                                           require_visible, tolerance=1e-9))
     return best
 
 
 def _evaluate(window, itrf_xyz, tt, depth, require_visible, tolerance=0.0):
     state = state_at(window, itrf_xyz, tt)
     state['t'] = tt
-    state['visible'] = state['sun_altitude'] >= -tolerance
+    state['visible'] = state['sun_altitude'] >= g.HORIZON_ALTITUDE_DEG - tolerance
     score = depth(state)
     state['depth'] = np.where(state['visible'], score, -np.inf) if require_visible else score
     return state
@@ -167,10 +179,12 @@ def _better(a, b):
 
 
 def _altitude_at(window, itrf_col, tt):
+    """Sun altitude relative to the apparent horizon, so its root is sunrise."""
     sun, _, rot = window.at(tt)
     site = g.rotate_to_icrf(rot, itrf_col[:, :, 0])
     up = g.rotate_to_icrf(rot, g.unit(_zenith_of(itrf_col[:, :, 0])))
-    return 90.0 - np.degrees(g.separation(sun - site, up))
+    altitude = 90.0 - np.degrees(g.separation(sun - site, up))
+    return altitude - g.HORIZON_ALTITUDE_DEG
 
 
 def state_at(window, itrf_xyz, tt):

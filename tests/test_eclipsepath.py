@@ -376,7 +376,8 @@ def test_region_boundary_sits_on_the_threshold():
                                ts.utc(2029, 1, 31).tt)[0]
     result = ec.analyse(ephem, event, threshold=0.6, samples=30)
     region = result.coverage_region
-    assert len(region.points) == ec.REGION_RAYS
+    # Refinement only ever adds vertices to the even sweep it starts from.
+    assert len(region.points) >= ec.REGION_RAYS
     grid = np.linspace(result.tt_first_contact, result.tt_last_contact,
                        ec.PREDICATE_TIME_SAMPLES)
     def peak_at(lat, lon):
@@ -405,6 +406,14 @@ def test_region_boundary_sits_on_the_threshold():
             grazing += 1
     assert checked > 40, 'expected much of the outline to be a clean contour'
     assert grazing, 'expected part of the outline to run along the terminator'
+
+    # The outline must also be smooth, not merely accurate: an edge drawn from
+    # vertices hundreds of kilometres apart is a row of facets even when every
+    # one of them is on the contour.  This is what the refinement guarantees.
+    lat = np.array([p.latitude for p in region.points])
+    lon = np.array([p.longitude for p in region.points])
+    gap = g.geodesic_distance(lat, lon, np.roll(lat, -1), np.roll(lon, -1))
+    assert gap.max() <= ec.REGION_MAX_GAP_KM * 1.05, gap.max()
     assert result.coverage_region.centre_latitude == region.centre_latitude
     centre = cc.peak_eclipse(result.window,
                              g.geodetic_to_itrf(region.centre_latitude,
