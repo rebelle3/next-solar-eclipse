@@ -113,13 +113,20 @@ for eclipse in search('2026-08-12', years=10, threshold=1.0):
 ### Making a map
 
 `examples/plot_path.py` renders a JSON run as a map image, and is the source of
-`examples/eclipse_2027_path.png`:
+`examples/eclipse_2027_path.png`.  Every word of the caption is read out of the
+JSON, and the projection follows the path: plate carree normally, azimuthal
+equidistant about the nearer pole once the path passes 70 degrees, where a
+rectangular map would smear it across the whole sheet.  Longitudes are carried
+past 180 degrees rather than wrapped, so a path round the far side of the world
+stays in one piece:
 
 ```
 pip install matplotlib
 curl -sO https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_countries.geojson
 eclipsepath --start 2027-01-01 --years 1 --samples 400 --format json -o eclipse.json
 python3 examples/plot_path.py eclipse.json ne_110m_admin_0_countries.geojson
+python3 examples/plot_path.py eclipse.json ne_110m_admin_0_countries.geojson \
+    --index 1 -o second.png
 ```
 
 ![Path of totality for the total solar eclipse of 2 August 2027](examples/eclipse_2027_path.png)
