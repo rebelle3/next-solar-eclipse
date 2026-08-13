@@ -141,6 +141,68 @@ python3 examples/plot_coverage.py contours.json ne_110m_admin_0_countries.geojso
 
 ![Coverage bands for the total solar eclipse of 2 August 2027](examples/eclipse_2027_coverage.png)
 
+### Watching the shadow move
+
+The maps above describe a whole eclipse at once.  The other cut through the
+same geometry is the whole world at one instant, which is what
+`eclipsepath.shadow` computes: the fraction of the Sun covered everywhere,
+the umbra's outline at true size, and the sunrise line.  Contours come from
+marching squares over a grid and are then placed exactly, each vertex bisected
+against the real field, so the grid decides only how many wiggles an outline
+can have and not where it sits.
+
+`examples/animate_shadow.py` turns that into an animation.  It drives the
+package directly rather than reading a JSON run, because a JSON run describes
+the path over the whole eclipse and each frame needs a different instant:
+
+```
+pip install matplotlib
+curl -sO https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_countries.geojson
+python3 examples/animate_shadow.py 2027-08-02 ne_110m_admin_0_countries.geojson
+python3 examples/animate_shadow.py 2028-07-22 ne_110m_admin_0_countries.geojson \
+    --out pacific.mp4 --frames 200 --step 0.4
+```
+
+![The Moon's shadow crossing the Earth on 2 August 2027](examples/eclipse_2027_shadow.gif)
+
+The greyscale is coverage, the contours are every twenty per cent, and the gold
+line is sunrise -- the shadow stops there because past it nobody can see the Sun
+to have it covered.  The view is fitted once to hold every frame, so what moves
+on screen is the shadow rather than the map.
+
+### A globe you can turn
+
+`python3 -m eclipsepath.scene` writes a single HTML file with a 3D Earth in it:
+drag to turn, wheel to zoom, scrub or play the eclipse through, and pull back to
+see the Moon and the shadow cone.  No server, no network, no libraries -- the
+page is raw WebGL 2 with the eclipse baked into it, about 130 kB all told.
+
+```
+curl -sO https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_land.geojson
+python3 -m eclipsepath.scene 2027-08-02 ne_110m_land.geojson -o globe.html
+```
+
+The shadow on the globe is not a texture.  The scene carries the Sun's and the
+Moon's positions in the Earth-fixed frame at a sample a minute, and the fragment
+shader works out, for every pixel, how much of the Sun is covered at the point
+of the Earth under it -- the same circle overlap `geometry.obscuration` uses.
+So the shadow has the right shape at the limb, thins correctly towards the
+terminator and stops dead at sunrise, none of which a painted-on texture does.
+
+The Moon is drawn where it is and at the size it is, sixty Earth radii away and
+a quarter the size, so the cone has the angle it really has.  There is no
+getting a diagram out of that ratio: pulling the Moon in closer would put the
+cone at an angle it does not have, so the camera pulls back instead and the
+Earth is small in that view because it is.
+
+`tests/test_webgl.py` holds all this to the package in a real browser --
+including the fragment shader itself, which renders its answer into a
+floating-point target one pixel wide so the number can be read straight back.
+On the reference build it agrees to 2.7e-5 of obscuration and puts the edge of
+totality within a metre of where `state_at` puts it.  A shadow that looks
+convincing and is a hundred kilometres out looks exactly as convincing, so it
+is worth checking the arithmetic the picture is actually drawn from.
+
 ### GeoJSON
 
 Each eclipse becomes a `greatest-eclipse` point and a `shadow-track` line.
@@ -429,6 +491,9 @@ named constants at the top of each plotting script and are trivial to swap.
 
 ```
 python3 tests/test_eclipsepath.py        # 46 tests, also runs under pytest
+python3 tests/test_shadow.py             # 17 tests: the instantaneous footprint
+python3 tests/test_animation.py          # 8 tests: the animated map
+python3 tests/test_webgl.py              # 6 tests: the globe, in a real browser
 python3 tests/verify_against_nasa.py     # row-by-row against NASA path tables
 python3 tests/verify_usno.py             # local circumstances vs the USNO
 python3 tests/verify_besselian.py        # local circumstances vs NASA elements
@@ -436,6 +501,11 @@ python3 tests/verify_century.py          # every eclipse for a century
 python3 tests/verify_independently.py    # against a naive second implementation
 python3 tests/verify_rendering.py        # every geometry the renderer is handed
 ```
+
+`tests/test_webgl.py` needs Playwright and a Chromium (`pip install playwright
+&& playwright install chromium`); without them it reports itself skipped rather
+than failing, since nothing else in the suite wants a browser.  Point it at an
+existing build with `ECLIPSEPATH_CHROMIUM`.
 
 The two local-circumstance checks read cached third-party responses from
 `tests/data` and need no network.  Refresh them with

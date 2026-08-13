@@ -15,3 +15,6 @@ eclipsepath = "eclipsepath.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["eclipsepath*"]
+
+[tool.setuptools.package-data]
+eclipsepath = ["viewer.html"]

@@ -121,14 +121,20 @@ What it turned up:
 - [ ] Test: JS-side interpolation of the samples reproduces Python's own
       `window.at(tt)` to < 1 km at instants between samples
 
-### Phase 4 — `eclipsepath/viewer.html`  [ ] in progress
+### Phase 4 — `eclipsepath/viewer.html`  [x]
 - [x] Raw WebGL 2: ellipsoid mesh, orbit camera, coastlines, graticule, path
 - [x] Fragment shader computes obscuration per pixel from the same
       circle-overlap as `geometry.obscuration` — a real shadow, not a texture
 - [x] Time scrubber, play/pause, speed, live readouts
 - [x] Single self-contained page, no external requests
-- [ ] Sun and Moon drawn in their real directions, with the umbral cone and
-      the Moon's track
+- [x] The Moon at its true distance and size, the umbral cone, and the Moon's
+      track across the eclipse
+
+The Sun is not drawn: at 23,000 Earth radii there is no frame that holds it and
+the Earth together.  The wide view frames the Earth-Moon pair rather than
+orbiting the Earth's centre -- pulling straight back until the Moon appears
+wastes most of the picture on empty space and leaves the Earth two pixels
+across.  Even framed, the Earth is small in that view, because it is.
 
 Confirmed so far: the shader agrees with the same arithmetic in double
 precision to 2e-5 of obscuration, so float32 in the fragment shader is not the
@@ -137,18 +143,29 @@ without `EXT_color_buffer_float` the framebuffer comes back incomplete and
 every draw is silently discarded, which reads exactly like a shader returning
 zero.
 
-### Phase 5 — automated tests for the viewer  [ ]
-- [ ] `tests/test_webgl.py`: headless Chromium via Playwright
-      (`/opt/pw-browsers/chromium-1194/chrome-linux/chrome`; WebGL 2 confirmed
-      working, float textures and `readPixels` both available)
-- [ ] Render obscuration to a float texture, read it back, compare against
-      Python on the same points — the shader must match to < 0.001
-- [ ] Screenshot at fixed camera and time; assert the umbra centre pixel
-- [ ] Assert zero network requests while the page loads and runs
+### Phase 5 — automated tests for the viewer  [x]
+- [x] `tests/test_webgl.py`, 6 tests in headless Chromium, skipping cleanly
+      where there is no browser
+- [x] The shader renders its answer into a floating-point target one pixel wide
+      and it is read straight back: **2.7e-5** of obscuration against the
+      package, and **under a metre** on the edge of totality
+- [x] The scene's minute cadence, interpolated in the browser, is within a
+      kilometre of the ephemeris — the Sun within three, its samples being
+      rounded to the kilometre on the way out
+- [x] Screenshot with the camera over the umbra: the darkest pixel lands within
+      a tenth of a frame of the centre
+- [x] One request while loading, the page itself
 
-### Phase 6 — documentation  [ ]
-- [ ] README section, kept short: what each shows, how to run, what was checked
-- [ ] Both artefacts regenerated and committed
+Worth recording: `RGBA32F` is not renderable until `EXT_color_buffer_float` is
+asked for by name.  Without it the framebuffer comes back incomplete and every
+draw is silently discarded, which reads exactly like a shader that computes
+zero.
+
+### Phase 6 — documentation  [x]
+- [x] README: two sections, what each shows, how to run, what was checked
+- [x] `examples/eclipse_2027_shadow.gif` (1.5 MB, requantised from 4.8) and
+      `examples/eclipse_2027_globe.html` (135 kB) committed
+- [x] `viewer.html` declared as package data so an install carries it
 
 ## Ground rules
 

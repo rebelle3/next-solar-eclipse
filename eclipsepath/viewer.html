@@ -61,6 +61,10 @@
     <label class="check"><input type="checkbox" id="showCoast" checked> Coast</label>
     <label class="check"><input type="checkbox" id="follow"> Follow</label>
   </div>
+  <div class="row">
+    <button id="wide">Show the Moon</button>
+    <label class="check"><input type="checkbox" id="showCone"> Cone</label>
+  </div>
   <div class="foot" id="foot"></div>
 </div>
 
@@ -307,8 +311,55 @@ out vec4 fragColor;
 uniform vec4 uColor;
 void main() { fragColor = uColor; }`;
 
+// The Moon is drawn where it is, at the size it is, 60 Earth radii away.  No
+// compression: a diagram with the Moon pulled in close would put the shadow
+// cone at an angle it does not have, and the cone is the one thing here worth
+// looking at.  The camera pulls back instead.
+const BODY_VS = `#version 300 es
+precision highp float;
+in vec3 aPos;
+uniform mat4 uViewProj;
+uniform vec3 uCentre;
+uniform float uRadius;
+out vec3 vNormal;
+void main() {
+  vNormal = normalize(aPos);
+  gl_Position = uViewProj * vec4(uCentre + aPos * uRadius, 1.0);
+}`;
+
+const BODY_FS = `#version 300 es
+precision highp float;
+in vec3 vNormal;
+out vec4 fragColor;
+uniform vec3 uToSun;
+uniform vec3 uTint;
+void main() {
+  float lit = max(0.0, dot(normalize(vNormal), normalize(uToSun)));
+  fragColor = vec4(uTint * (0.06 + 0.94 * lit), 1.0);
+}`;
+
 const globeProgram = program(GLOBE_VS, GLOBE_FS);
 const lineProgram = program(LINE_VS, LINE_FS);
+const bodyProgram = program(BODY_VS, BODY_FS);
+
+function buildSphere(rows, columns) {
+  const positions = [], indices = [];
+  for (let i = 0; i <= rows; i++) {
+    const theta = Math.PI * i / rows;
+    for (let j = 0; j <= columns; j++) {
+      const phi = 2 * Math.PI * j / columns;
+      positions.push(Math.sin(theta) * Math.cos(phi),
+                     Math.sin(theta) * Math.sin(phi), Math.cos(theta));
+    }
+  }
+  for (let i = 0; i < rows; i++)
+    for (let j = 0; j < columns; j++) {
+      const a = i * (columns + 1) + j, b = a + columns + 1;
+      indices.push(a, b, a + 1, a + 1, b, b + 1);
+    }
+  return {positions: new Float32Array(positions),
+          indices: new Uint16Array(indices)};
+}
 
 function buildGlobe(rows, columns) {
   const positions = [], indices = [];
@@ -379,6 +430,73 @@ const pathLines = makeLineSet(
   0.0025);
 const graticule = makeLineSet(buildGraticule(), 0.0006);
 
+const moonMesh = buildSphere(48, 96);
+const moonVao = gl.createVertexArray();
+gl.bindVertexArray(moonVao);
+buffer(moonMesh.positions, gl.ARRAY_BUFFER);
+gl.enableVertexAttribArray(0);
+gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+buffer(moonMesh.indices, gl.ELEMENT_ARRAY_BUFFER);
+gl.bindVertexArray(null);
+
+// The Moon's track across the eclipse, in the same Earth-fixed frame as
+// everything else.  Most of its curve is the Earth turning rather than the
+// Moon going round, which is why the panel calls it a track and not an orbit.
+const moonTrack = (() => {
+  const points = [];
+  for (let i = 0; i < SCENE.time.count; i++)
+    points.push(SCENE.moon_itrf_km[3 * i], SCENE.moon_itrf_km[3 * i + 1],
+                SCENE.moon_itrf_km[3 * i + 2]);
+  const vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+  buffer(new Float32Array(points), gl.ARRAY_BUFFER);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+  gl.bindVertexArray(null);
+  return {vao: vao, counts: [SCENE.time.count]};
+})();
+
+// The umbral cone, rebuilt each frame: generators from the Moon's limb to the
+// apex where the cone closes, plus the limb itself and the axis.  For a total
+// eclipse the apex falls just past the Earth's surface, which is exactly what
+// makes it total, and the near half of the cone is drawn over the globe while
+// the far half is hidden behind it.
+const CONE_RAYS = 32, CONE_STEPS = 24;
+const coneBuffer = gl.createBuffer();
+const coneVao = gl.createVertexArray();
+gl.bindVertexArray(coneVao);
+gl.bindBuffer(gl.ARRAY_BUFFER, coneBuffer);
+gl.enableVertexAttribArray(0);
+gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+gl.bindVertexArray(null);
+
+function coneLines(state) {
+  const axis = unit(sub(state.moon, state.sun));
+  const separation = len(sub(state.moon, state.sun));
+  // Where the umbral cone closes: similar triangles on the Sun and the Moon.
+  const apexLength = C.r_moon_km * separation / (C.r_sun_km - C.r_moon_km);
+  const apex = [state.moon[0] + axis[0] * apexLength,
+                state.moon[1] + axis[1] * apexLength,
+                state.moon[2] + axis[2] * apexLength];
+  let helper = Math.abs(axis[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+  const e1 = unit(cross(axis, helper)), e2 = cross(axis, e1);
+  const points = [], counts = [];
+  for (let k = 0; k < CONE_RAYS; k++) {
+    const a = 2 * Math.PI * k / CONE_RAYS;
+    const rim = [state.moon[0] + (e1[0] * Math.cos(a) + e2[0] * Math.sin(a)) * C.r_moon_km,
+                 state.moon[1] + (e1[1] * Math.cos(a) + e2[1] * Math.sin(a)) * C.r_moon_km,
+                 state.moon[2] + (e1[2] * Math.cos(a) + e2[2] * Math.sin(a)) * C.r_moon_km];
+    for (let s = 0; s <= CONE_STEPS; s++) {
+      const t = s / CONE_STEPS;
+      points.push(rim[0] + (apex[0] - rim[0]) * t,
+                  rim[1] + (apex[1] - rim[1]) * t,
+                  rim[2] + (apex[2] - rim[2]) * t);
+    }
+    counts.push(CONE_STEPS + 1);
+  }
+  return {points: new Float32Array(points), counts: counts};
+}
+
 function buildGraticule() {
   const rings = [];
   for (let lat = -60; lat <= 60; lat += 30) {
@@ -396,7 +514,8 @@ function buildGraticule() {
 
 // ----------------------------------------------------------------- camera ---
 
-const camera = {longitude: 20, latitude: 15, distance: 3.2};
+const camera = {longitude: 20, latitude: 15, distance: 3.2, target: [0, 0, 0]};
+const MAX_DISTANCE = 220;
 let dragging = null;
 
 canvas.addEventListener('pointerdown', e => {
@@ -414,7 +533,7 @@ canvas.addEventListener('pointermove', e => {
 });
 canvas.addEventListener('wheel', e => {
   e.preventDefault();
-  camera.distance = Math.max(1.25, Math.min(14,
+  camera.distance = Math.max(1.25, Math.min(MAX_DISTANCE,
                     camera.distance * Math.exp(e.deltaY * 0.0012)));
 }, {passive: false});
 
@@ -446,11 +565,13 @@ function multiply(a, b) {
 function viewProjection(aspect) {
   const r = C.earth_a_km * camera.distance;
   const lat = camera.latitude * Math.PI / 180, lon = camera.longitude * Math.PI / 180;
-  const eye = [r * Math.cos(lat) * Math.cos(lon), r * Math.cos(lat) * Math.sin(lon),
-               r * Math.sin(lat)];
-  const view = lookAt(eye, [0, 0, 0], [0, 0, 1]);
+  const t = camera.target;
+  const eye = [t[0] + r * Math.cos(lat) * Math.cos(lon),
+               t[1] + r * Math.cos(lat) * Math.sin(lon),
+               t[2] + r * Math.sin(lat)];
+  const view = lookAt(eye, t, [0, 0, 1]);
   const proj = perspective(45 * Math.PI / 180, aspect,
-                           C.earth_a_km * 0.05, C.earth_a_km * 60);
+                           C.earth_a_km * 0.02, C.earth_a_km * 900);
   return {matrix: multiply(proj, view), eye: eye};
 }
 
@@ -500,7 +621,10 @@ el('standfirst').textContent = E.central
      '% of the Sun is hidden.');
 el('foot').innerHTML = 'Shadow computed per pixel from JPL DE440s positions, ' +
   'with the same circle overlap the eclipsepath package uses. ' +
-  'Saros ' + E.saros + ', gamma ' + E.gamma.toFixed(3) + '.';
+  'Saros ' + E.saros + ', gamma ' + E.gamma.toFixed(3) + '. ' +
+  'The Moon is at its true distance and size, so the cone has the angle it ' +
+  'really has; its track is drawn in the same Earth-fixed frame as the globe, ' +
+  'which means most of that curve is the Earth turning.';
 
 el('scrub').addEventListener('input', () => {
   tt = T0 + (T1 - T0) * el('scrub').value / 1000.0;
@@ -511,6 +635,28 @@ el('play').addEventListener('click', () => {
   if (playing && tt >= T1 - 1e-9) tt = T0;
   el('play').textContent = playing ? 'Pause' : 'Play';
 });
+let wideView = false;
+el('wide').addEventListener('click', () => {
+  wideView = !wideView;
+  el('wide').textContent = wideView ? 'Back to the Earth' : 'Show the Moon';
+  el('showCone').checked = wideView;
+  if (!wideView) {
+    camera.target = [0, 0, 0];
+    camera.distance = 3.2;
+    return;
+  }
+  // Aim between the two rather than at the Earth.  Orbiting the Earth's centre
+  // and pulling back until the Moon comes into frame wastes most of the
+  // picture on the far side of the Earth and leaves the Earth two pixels
+  // across; framing the pair puts each of them near an edge instead.  There is
+  // no getting away from the ratio -- the Moon really is sixty Earth radii off
+  // and a quarter the size -- but this is as close as honest framing gets.
+  const moon = stateAt(tt).moon;
+  camera.target = [moon[0] / 2, moon[1] / 2, moon[2] / 2];
+  camera.distance = len(moon) / C.earth_a_km / 2
+                    / Math.tan(22.5 * Math.PI / 180) * 1.15;
+  camera.latitude = 55;
+});
 el('faster').addEventListener('click', () => { rate = Math.min(3840, rate * 2); showRate(); });
 el('slower').addEventListener('click', () => { rate = Math.max(15, rate / 2); showRate(); });
 function showRate() { el('rate').textContent = rate + '× real time'; }
@@ -518,6 +664,9 @@ showRate();
 
 // ------------------------------------------------------------------ draw ----
 
+const bodyUniforms = {};
+for (const name of ['uViewProj', 'uCentre', 'uRadius', 'uToSun', 'uTint'])
+  bodyUniforms[name] = gl.getUniformLocation(bodyProgram, name);
 const uniforms = {};
 for (const name of ['uViewProj', 'uSun', 'uMoon', 'uRSun', 'uRMoon', 'uE2',
                     'uHorizon', 'uMode'])
@@ -571,6 +720,29 @@ function render(mode) {
       drawLineSet(coast, [0.60, 0.68, 0.78, 0.55], camera3.matrix);
     if (el('showPath').checked)
       drawLineSet(pathLines, [0.83, 0.63, 0.09, 0.95], camera3.matrix);
+
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    if (el('showCone').checked) {
+      const cone = coneLines(state);
+      gl.bindVertexArray(coneVao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, coneBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, cone.points, gl.DYNAMIC_DRAW);
+      drawLineSet({vao: coneVao, counts: cone.counts},
+                  [0.35, 0.55, 0.85, 0.16], camera3.matrix);
+      drawLineSet(moonTrack, [0.55, 0.60, 0.70, 0.35], camera3.matrix);
+    }
+    gl.disable(gl.BLEND);
+
+    gl.useProgram(bodyProgram);
+    gl.uniformMatrix4fv(bodyUniforms.uViewProj, false, camera3.matrix);
+    gl.uniform3fv(bodyUniforms.uCentre, new Float32Array(state.moon));
+    gl.uniform1f(bodyUniforms.uRadius, C.r_moon_km);
+    gl.uniform3fv(bodyUniforms.uToSun,
+                  new Float32Array(unit(sub(state.sun, state.moon))));
+    gl.uniform3fv(bodyUniforms.uTint, new Float32Array([0.78, 0.76, 0.72]));
+    gl.bindVertexArray(moonVao);
+    gl.drawElements(gl.TRIANGLES, moonMesh.indices.length, gl.UNSIGNED_SHORT, 0);
   }
   return state;
 }
@@ -586,7 +758,7 @@ function readouts(state) {
       Math.abs(axis.latitude).toFixed(2) + (axis.latitude >= 0 ? '°N ' : '°S ') +
       Math.abs(axis.longitude).toFixed(2) + (axis.longitude >= 0 ? '°E' : '°W');
     el('alt').textContent = seen.sun_altitude.toFixed(1) + '°';
-    if (el('follow').checked) {
+    if (el('follow').checked && !wideView) {
       camera.longitude = axis.longitude;
       camera.latitude = axis.latitude;
     }
@@ -602,6 +774,10 @@ function frame(now) {
     if (lastFrame !== null)
       tt += (now - lastFrame) / 1000.0 * rate / 86400.0;
     if (tt >= T1) { tt = T1; playing = false; el('play').textContent = 'Play'; }
+  }
+  if (wideView) {
+    const moon = stateAt(tt).moon;
+    camera.target = [moon[0] / 2, moon[1] / 2, moon[2] / 2];
   }
   lastFrame = now;
   readouts(render(0));
