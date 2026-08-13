@@ -82,7 +82,10 @@ def main():
                                        result.tt_last_contact)
             errors.append((abs(mine - theirs), date, latitude, longitude,
                            mine, theirs))
-            if seen is not None and theirs > 0.01 and when == when:
+            # Skip the time comparison inside totality: coverage is flat at 1
+            # right across it, so every instant ties and the two
+            # implementations break that tie differently by design.
+            if (seen is not None and 0.01 < theirs < 0.999 and when == when):
                 timing.append((abs(seen['tt_maximum'] - when) * 86400.0, date))
             tested += 1
         print('  %s: %d sites' % (date, len(sites)), flush=True)

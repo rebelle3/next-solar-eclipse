@@ -14,6 +14,14 @@ from . import geometry as g
 
 GOLDEN = 0.6180339887498949
 
+# A bisection lands *on* the horizon, and re-testing that instant for
+# visibility compares two altitudes computed by slightly different routes.  The
+# tolerance has to exceed the difference between them or the boundary instant
+# is thrown out as invisible and a worse sample wins — which matters, because
+# for a site catching the eclipse at sunrise that instant *is* the maximum.
+# A millionth of a degree is a tenth of a metre on the ground.
+HORIZON_EDGE_TOLERANCE_DEG = 1e-6
+
 
 def observe(window, tt, itrf_xyz):
     """Apparent Sun/Moon geometry seen from ``itrf_xyz`` at times ``tt``.
@@ -191,7 +199,7 @@ def peak_eclipse(window, itrf_xyz, tt_grid, depth=None, require_visible=True):
                       tt_grid[k], tt_grid[k + 1], 30)
         t_b = np.where(has, t_b, best['t'])
         best = _better(best, _evaluate(window, itrf_xyz, t_b, depth,
-                                       require_visible, tolerance=1e-9))
+                                       require_visible, tolerance=HORIZON_EDGE_TOLERANCE_DEG))
     return best
 
 
