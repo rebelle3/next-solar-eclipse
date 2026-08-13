@@ -95,6 +95,20 @@ for eclipse in search('2026-08-12', years=10, threshold=1.0):
         print(point.latitude, point.longitude, point.tt_start, point.duration_seconds)
 ```
 
+### Making a map
+
+`examples/plot_path.py` renders a JSON run as a map image, and is the source of
+`examples/eclipse_2027_path.png`:
+
+```
+pip install matplotlib
+curl -sO https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_countries.geojson
+eclipsepath --start 2027-01-01 --years 1 --samples 400 --format json -o eclipse.json
+python3 examples/plot_path.py eclipse.json ne_110m_admin_0_countries.geojson
+```
+
+![Path of totality for the total solar eclipse of 2 August 2027](examples/eclipse_2027_path.png)
+
 ### GeoJSON
 
 Each eclipse becomes a `greatest-eclipse` point and a `shadow-track` line.
