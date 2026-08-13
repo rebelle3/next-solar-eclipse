@@ -18,7 +18,11 @@ def circumstances_at(eclipse, latitude, longitude, height_km=0.0):
                        PREDICATE_TIME_SAMPLES)
     xyz = g.geodetic_to_itrf(latitude, longitude, height_km).reshape(3, 1)
     peak = cc.peak_eclipse(window, xyz, grid)
-    if float(peak['obscuration'][0]) <= 0.0:
+    # Visibility, not coverage: the geometry can put the Moon squarely over the
+    # Sun for a site where the Sun is below the horizon throughout, and the
+    # deepest such instant still carries its obscuration.  Nobody there sees
+    # anything, so there are no circumstances to report.
+    if not bool(peak['visible'][0]) or float(peak['obscuration'][0]) <= 0.0:
         return None
     contacts = cc.contact_times(window, xyz[:, 0], grid)
     return {
